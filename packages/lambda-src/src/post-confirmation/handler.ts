@@ -42,7 +42,12 @@ export async function handler(
   })
 
   await assignBaselineGroups({
-    userPoolId: config.userPoolId,
+    // Cognito always includes userPoolId on the trigger event itself, so
+    // there's no need for a USER_POOL_ID env var here -- deliberately, since
+    // that would create a circular Terraform dependency (the pool's
+    // lambda_config needs this function's ARN, and this function would need
+    // the pool's ID).
+    userPoolId: event.userPoolId,
     username,
     groups: config.baselineGroups,
     cognitoClient,

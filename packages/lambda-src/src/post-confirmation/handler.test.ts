@@ -17,7 +17,6 @@ const baseEnv = {
   DEFAULT_ROLE_ID: 'member',
   TENANTS_TABLE_NAME: 'tenants-table',
   ROLE_ASSIGNMENTS_TABLE_NAME: 'role-assignments-table',
-  USER_POOL_ID: 'us-east-1_example',
   BASELINE_GROUPS: 'members',
 }
 

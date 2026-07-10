@@ -8,7 +8,6 @@ describe('loadPostConfirmationConfig', () => {
       DEFAULT_ROLE_ID: 'member',
       TENANTS_TABLE_NAME: 'tenants',
       ROLE_ASSIGNMENTS_TABLE_NAME: 'role-assignments',
-      USER_POOL_ID: 'us-east-1_example',
       BASELINE_GROUPS: 'members',
     })
 
@@ -22,7 +21,6 @@ describe('loadPostConfirmationConfig', () => {
       DEFAULT_ROLE_ID: 'member',
       TENANTS_TABLE_NAME: 'tenants',
       ROLE_ASSIGNMENTS_TABLE_NAME: 'role-assignments',
-      USER_POOL_ID: 'us-east-1_example',
       BASELINE_GROUPS: 'members,registered-users',
       HOOK_MODULE_PATH: '/opt/hooks/on-signup.js',
     })
@@ -38,7 +36,6 @@ describe('loadPostConfirmationConfig', () => {
       DEFAULT_ROLE_ID: 'member',
       TENANTS_TABLE_NAME: 'tenants',
       ROLE_ASSIGNMENTS_TABLE_NAME: 'role-assignments',
-      USER_POOL_ID: 'us-east-1_example',
     })
 
     expect(config.baselineGroups).toEqual([])
@@ -50,7 +47,6 @@ describe('loadPostConfirmationConfig', () => {
         DEFAULT_ROLE_ID: 'member',
         TENANTS_TABLE_NAME: 'tenants',
         ROLE_ASSIGNMENTS_TABLE_NAME: 'role-assignments',
-        USER_POOL_ID: 'us-east-1_example',
       }),
     ).toThrow(/DEFAULT_TENANT_ID/)
   })

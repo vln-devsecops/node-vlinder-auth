@@ -6,7 +6,6 @@ export interface PostConfirmationConfig {
   defaultRoleId: string
   tenantsTableName: string
   roleAssignmentsTableName: string
-  userPoolId: string
   baselineGroups: string[]
   hookModulePath?: string
 }
@@ -16,7 +15,6 @@ const REQUIRED_KEYS = [
   'DEFAULT_ROLE_ID',
   'TENANTS_TABLE_NAME',
   'ROLE_ASSIGNMENTS_TABLE_NAME',
-  'USER_POOL_ID',
 ] as const
 
 export function loadPostConfirmationConfig(
@@ -36,7 +34,6 @@ export function loadPostConfirmationConfig(
     defaultRoleId: env.DEFAULT_ROLE_ID!,
     tenantsTableName: env.TENANTS_TABLE_NAME!,
     roleAssignmentsTableName: env.ROLE_ASSIGNMENTS_TABLE_NAME!,
-    userPoolId: env.USER_POOL_ID!,
     baselineGroups: env.BASELINE_GROUPS
       ? env.BASELINE_GROUPS.split(',').map((group) => group.trim()).filter(Boolean)
       : [],
