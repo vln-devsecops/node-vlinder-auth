@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Source from repo root: source ./bootstrap
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  echo "Run this script by sourcing it: source ./bootstrap"
+  exit 1
+fi
+
+_bootstrap_prompt_yes_no() {
+  local prompt="$1"
+  local answer
+  read -r -p "${prompt} [y/N]: " answer
+  [[ "${answer}" =~ ^[Yy]$ ]]
+}
+
+if [[ "${USE_DEVCONTAINER:-0}" == "1" ]] || [[ -f .devcontainer/devcontainer.json ]]; then
+  echo "This repository is expected to run from a dev container."
+  echo "Open in the dev container and source bootstrap there."
+  return 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Missing required tooling: node"
+  echo "Install Node.js (see .nvmrc for the expected major version), then source bootstrap again."
+  return 1
+fi
+
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
+EXPECTED_MAJOR="$(cat .nvmrc 2>/dev/null || true)"
+if [[ -n "${EXPECTED_MAJOR}" ]] && [[ "${NODE_MAJOR}" != "${EXPECTED_MAJOR}" ]]; then
+  echo "node is v${NODE_MAJOR}, but .nvmrc expects v${EXPECTED_MAJOR}."
+  echo "Use nvm (or equivalent) to switch, then source bootstrap again."
+  return 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "Missing required tooling: npm"
+  return 1
+fi
+
+if [[ ! -f .env ]]; then
+  if [[ ! -f dot-env ]]; then
+    echo "Missing dot-env template in repository root."
+    return 1
+  fi
+
+  if _bootstrap_prompt_yes_no ".env is missing. Create it from dot-env now?"; then
+    cp dot-env .env
+    echo "Created .env from dot-env. Please fill in values, then source bootstrap again."
+    return 1
+  else
+    echo "Cannot continue without .env."
+    return 1
+  fi
+fi
+
+# shellcheck disable=SC1091
+source ./.env
+
+npm install
+
+echo "Bootstrap complete for node-vlinder-auth."

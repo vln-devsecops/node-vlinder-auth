@@ -1,0 +1,3 @@
+# Copy to .env and adjust.
+# Set to 1 for complex repos that should only bootstrap in a dev container.
+USE_DEVCONTAINER=0
