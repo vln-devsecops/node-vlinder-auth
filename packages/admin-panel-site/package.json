@@ -1,5 +1,5 @@
 {
-  "name": "@vln-devsecops/admin-panel-site",
+  "name": "@vln-devsecops/auth-admin-panel",
   "private": true,
   "type": "module",
   "scripts": {
