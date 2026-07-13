@@ -1,5 +1,5 @@
 {
-  "name": "@vlinder-auth/admin-panel-site",
+  "name": "@vln-devsecops/admin-panel-site",
   "private": true,
   "type": "module",
   "scripts": {

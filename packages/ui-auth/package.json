@@ -1,5 +1,5 @@
 {
-  "name": "@vlinder-auth/ui-auth",
+  "name": "@vln-devsecops/ui-auth",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
