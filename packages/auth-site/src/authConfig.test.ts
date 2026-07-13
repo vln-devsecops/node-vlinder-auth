@@ -37,12 +37,11 @@ describe('parseAuthResult', () => {
 })
 
 describe('isMultiTenant', () => {
-  it('defaults to false when VITE_MULTI_TENANT is unset', () => {
-    expect(isMultiTenant({ VITE_MULTI_TENANT: undefined })).toBe(false)
+  it('returns true when passed true', () => {
+    expect(isMultiTenant(true)).toBe(true)
   })
 
-  it('is true only when VITE_MULTI_TENANT is exactly "true"', () => {
-    expect(isMultiTenant({ VITE_MULTI_TENANT: 'true' })).toBe(true)
-    expect(isMultiTenant({ VITE_MULTI_TENANT: 'yes' })).toBe(false)
+  it('returns false when passed false', () => {
+    expect(isMultiTenant(false)).toBe(false)
   })
 })

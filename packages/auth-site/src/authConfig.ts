@@ -1,18 +1,8 @@
-// Direct Cognito IDP API auth configuration for the admin panel SPA.
-// This replaces the previous oidc-client-ts/UserManager redirect-based flow:
-// instead of redirecting the browser to an authorization endpoint, the SPA
-// calls Cognito's regional IDP API directly via the /idp CloudFront path
-// (USER_PASSWORD_AUTH flow -- see cognito_auth module design notes).
-
-export interface AuthSiteEnv {
-  /** Cognito user pool client ID (auth_site_client_id module output). */
-  VITE_USER_POOL_CLIENT_ID: string
-  /** Base URL for the admin API (admin_api_invoke_url module output), served
-   *  same-origin at /admin/api by CloudFront -- only the client ID is strictly
-   *  needed for auth; this env var drives the apiClient separately. */
-  VITE_ADMIN_API_BASE_URL: string
-  VITE_MULTI_TENANT?: string
-}
+// Auth configuration helpers for the auth-site SPA.
+// buildInitiateAuthBody/parseAuthResult are pure functions for the
+// USER_PASSWORD_AUTH Cognito direct-IDP-API flow. Runtime values
+// (userPoolClientId, multiTenant) come from /config.json (see config.ts),
+// not from Vite build-time env vars.
 
 export interface CognitoTokens {
   accessToken: string
@@ -49,7 +39,7 @@ export function parseAuthResult(
 }
 
 /** Whether the current session uses multiple tenants (controls UI column visibility). */
-export function isMultiTenant(env: Pick<AuthSiteEnv, 'VITE_MULTI_TENANT'>): boolean {
-  return env.VITE_MULTI_TENANT === 'true'
+export function isMultiTenant(value: boolean): boolean {
+  return value
 }
 
