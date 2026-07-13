@@ -1,7 +1,16 @@
 {
   "name": "@vlinder-auth/lambda-src",
-  "private": true,
+  "version": "1.0.0",
   "type": "module",
+  "description": "Lambda handler source for cognito_auth module (post-confirmation, pre-token-generation, admin-api).",
+  "main": "dist/index.js",
+  "files": [
+    "dist/"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",

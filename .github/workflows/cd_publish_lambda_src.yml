@@ -1,0 +1,85 @@
+---
+name: Publish lambda-src to GitHub Packages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - packages/lambda-src/**
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and upload lambda-src
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Get version major and minor from package.json
+        id: get_version
+        working-directory: packages/lambda-src
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          VERSION_MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          VERSION_MINOR=$(echo "$VERSION" | cut -d. -f2)
+          echo "VERSION_MAJOR=$VERSION_MAJOR" >> "$GITHUB_OUTPUT"
+          echo "VERSION_MINOR=$VERSION_MINOR" >> "$GITHUB_OUTPUT"
+
+      - name: Set version with build number
+        working-directory: packages/lambda-src
+        run: |
+          VERSION="${{ steps.get_version.outputs.VERSION_MAJOR }}.${{ steps.get_version.outputs.VERSION_MINOR }}.${{ github.run_number }}"
+          npm version --no-git-tag-version "$VERSION"
+
+      - name: Build
+        run: npm run build --workspace packages/lambda-src
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-src-package
+          path: |
+            packages/lambda-src/dist/
+            packages/lambda-src/package.json
+
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-src-package
+          path: ./package
+
+      - name: Configure npm authentication
+        working-directory: ./package
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to GitHub Packages
+        working-directory: ./package
+        run: npm publish --registry=https://npm.pkg.github.com/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
