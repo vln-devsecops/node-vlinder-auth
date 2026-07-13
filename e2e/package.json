@@ -1,0 +1,23 @@
+{
+  "name": "@vln-devsecops/auth-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "cucumber-js --dry-run",
+    "test:live": "cucumber-js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.699.0",
+    "@aws-sdk/client-dynamodb": "^3.699.0",
+    "@aws-sdk/lib-dynamodb": "^3.699.0"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^11.0.0",
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.15.23",
+    "playwright": "^1.49.0",
+    "typescript": "~5.7.2",
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "default": {
+    "require": ["support/world.ts", "support/hooks.ts", "steps/**/*.ts"],
+    "requireModule": ["tsx/esm"],
+    "format": ["progress-bar", "json:reports/e2e.json"],
+    "paths": ["features/**/*.feature"],
+    "parallel": 1,
+    "retry": 1,
+    "timeout": 60000
+  }
+}
