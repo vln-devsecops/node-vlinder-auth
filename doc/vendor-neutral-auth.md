@@ -152,17 +152,67 @@ app deliberately, unaffected by how the app itself authenticates).
   keep the TTL short since it's an in-flight auth token. Signing key lives with
   the auth Lambda (KMS asymmetric key, or a Secrets Manager HS256 secret);
   KMS-asymmetric keeps the private key out of the function entirely.
-- **Federation config surface.** How a consumer declares "email domain X
-  federates to OIDC provider Y" — a new module variable, and where the
-  provider secrets live (Secrets Manager).
-- **Token delivery/storage.** Same open item as today (sessionStorage vs
-  httpOnly cookie); the vendor-neutral API is a natural place to move to
-  httpOnly-cookie sessions set by the backend, which also improves security —
-  worth deciding here rather than carrying the sessionStorage baseline
-  forward.
-- **Does the admin API's JWT authorizer stay Cognito-issued?** Even with a
-  vendor-neutral front door, the admin API currently authorizes against
-  Cognito-issued JWTs. If the identity provider is later swapped, the
-  authorizer's issuer/JWKS must move too — keep this in view so we don't
-  vendor-neutralize the front door while leaving Cognito hard-wired at the
-  back.
+- **Settled: federation is configured in the admin panel** (decision: rlc).
+  Rather than a Terraform variable (redeploy per change, GitOps-declared), the
+  domain→provider mapping is managed at runtime by admins, gated behind a new
+  `federation:*` privilege. Proposed UX — a new **Identity Providers** section
+  alongside Users/Roles:
+  - **List:** each configured provider — display name, protocol (OIDC), the
+    email domain(s) that route to it, enabled/disabled.
+  - **Add / edit provider form:** display name; OIDC **discovery URL**
+    (`…/.well-known/openid-configuration`); client id; **client secret**
+    (write-only field — stored in Secrets Manager, never read back, rendered as
+    "••• set" with a "replace" action); scopes; and the email domain(s) mapped
+    to this provider.
+  - **Validation:** on save the auth/admin backend fetches the discovery URL to
+    confirm it resolves, and enforces domain-mapping uniqueness (one domain →
+    one provider).
+  - **Enable/disable** toggle so a provider can be staged before it goes live.
+
+  Storage: non-secret provider config in a new CMK-encrypted
+  `identity_providers` table (in multi-tenant mode the domain mapping reuses the
+  tenants table's existing `emailDomain` index that already resolves a user's
+  tenant at signup); the **client secret in Secrets Manager**, referenced by
+  ARN. The admin-api Lambda writes config + secret; the auth Lambda reads the
+  mapping (and the secret, for the code exchange) at `identify`/`callback` time.
+  Trade-off of admin-managed vs module-variable: runtime-editable with no
+  redeploy and self-service per tenant, at the cost of a larger privileged
+  write surface to secure (hence the dedicated `federation:*` privilege and
+  write-only secret handling) — acceptable, and consistent with roles/users
+  already being runtime-managed here.
+- **Token delivery/storage — trade-offs (decision pending).** The realistic
+  browser threat is XSS, and that's what splits the two options:
+  - **`sessionStorage` (today's baseline).** Simple: the SPA reads the token
+    and sets `Authorization: Bearer` itself, which is exactly what the admin
+    API's API-Gateway JWT authorizer already expects. No CSRF exposure (nothing
+    is auto-sent). *But* the token is readable by any JS on the page, so a
+    single XSS exfiltrates it — worst for the long-lived refresh token.
+  - **httpOnly cookie set by the backend.** `HttpOnly` puts the token out of
+    JS's reach, so XSS can't read it — the main security win, and it matters
+    most for the refresh token. Because the whole app is one first-party
+    same-origin surface behind CloudFront (`/api/v1/*`), the cookie is sent
+    automatically with no header plumbing in the SPA, and `SameSite=Strict` +
+    `Secure` is fully viable (no legitimate cross-site use), which closes most
+    of the CSRF exposure that cookies normally reintroduce; add a double-submit
+    CSRF token on state-changing routes for belt-and-suspenders. Two real
+    costs: (1) the admin API's JWT authorizer reads the `Authorization` header,
+    not a cookie, so cookie sessions require either a Lambda authorizer that
+    reads the cookie or an edge function that copies cookie→header — i.e. this
+    is coupled to the authorizer-issuer item below and should land with it; and
+    (2) a JWT in a cookie must stay under the ~4 KB limit (watch a large
+    `permissions` claim).
+
+  **Recommendation:** move to `HttpOnly` + `SameSite=Strict` + `Secure`
+  cookies as part of the auth-Lambda work — it's a clear XSS win on an
+  already-same-origin design — but land it together with the authorizer change
+  (next item), and keep `sessionStorage` as the baseline until that pair ships.
+  **Confirm the direction.**
+- **Acknowledged: the admin API authorizer must move with the IdP** (decision:
+  rlc — keep in view). Even behind a vendor-neutral front door the admin API
+  authorizes against Cognito-issued JWTs today; if the IdP is later swapped,
+  the authorizer's issuer/JWKS must move too, or we've vendor-neutralized the
+  front door while leaving Cognito hard-wired at the back. This is the same
+  authorizer touched by the token-storage decision above (cookie sessions need
+  the authorizer to read a cookie, not a Bearer header), so both changes land
+  together in the federation increment — noted, not blocking the first
+  password-flow increment.
