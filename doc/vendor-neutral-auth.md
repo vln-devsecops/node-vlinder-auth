@@ -19,15 +19,18 @@ behind that API, swappable later without touching the frontend.
    remembered value in `localStorage`/cookie.
 2. **Backend resolves the identity provider** tied to that account and tells
    the frontend how to proceed:
-   - **Federated IdP** → the response directs the browser to redirect to that
-     provider (the frontend does not need to know which vendor, only that it
-     must navigate to a URL the backend supplies).
+   - **Federated IdP** → the identify response tells the frontend to make a
+     **top-level browser navigation** to a same-origin authorize endpoint
+     (`/api/v1/auth/authorize`), which answers with a **real `302`** to the
+     provider. The frontend does not know the vendor and never handles the
+     cross-origin redirect itself — it just sets `window.location`.
    - **Local password** → the response tells the frontend to prompt for a
-     password, which it submits back to the same API.
-   - The backend signals which via HTTP status: a **2xx** carrying a
-     next-step directive vs. a **redirect**. (See "Open question: 2xx vs 3xx"
-     below — the brief says "either a 2xx or a redirect"; we should pin the
-     exact contract before building.)
+     password, which it submits back to the same API (a plain `fetch`, no
+     navigation).
+   - So: **`200`** carrying a next-step directive for both branches, and the
+     federated branch's directive is "navigate to this same-origin URL," which
+     is where the genuine **`302`** happens. See "Settled: redirect is a real
+     302" below.
 
 This is standard **home-realm discovery / identifier-first** login. Cognito
 supports the pieces (hosted federation, `AdminInitiateAuth`, managed login),
@@ -43,8 +46,16 @@ get a token in the first place). Illustrative, to be firmed up:
 - `POST /api/v1/auth/identify`
   Body: `{ "identifier": "jane@example.com" }`
   → `200 { "method": "password", "session": "<opaque>" }` — prompt for password.
-  → `200 { "method": "redirect", "location": "https://idp.example/authorize?..." }`
-    — frontend navigates there. (Or a real `302` — see open question.)
+  → `200 { "method": "redirect", "location": "/api/v1/auth/authorize?session=<opaque>" }`
+    — the `location` is **same-origin**; the frontend does
+    `window.location = location`.
+- `GET /api/v1/auth/authorize?session=<opaque>`
+  The genuine redirect. Looks up the resolved federated provider for the
+  session and answers **`302`** with `Location:` set to the provider's
+  `/authorize?...` (client_id, redirect_uri back to our callback, state, PKCE).
+  Because this is a top-level browser navigation to a same-origin endpoint, the
+  browser follows the cross-origin `302` natively — no `fetch`, no React
+  redirect handling.
 - `POST /api/v1/auth/password`
   Body: `{ "session": "<opaque>", "password": "..." }`
   → `200 { "tokens": { accessToken, idToken, refreshToken, expiresAt } }`
@@ -121,14 +132,15 @@ app deliberately, unaffected by how the app itself authenticates).
 
 ## Open questions to settle before building
 
-- **2xx vs 3xx for the "go to your IdP" branch.** The brief says "2xx or a
-  redirect." A real `302` is the most literal reading and lets the browser
-  navigate natively, but an XHR/`fetch` can't transparently follow a
-  cross-origin auth redirect and read the result — so an identifier-first SPA
-  usually prefers a `200` carrying `{ method: "redirect", location }` and does
-  `window.location = location` itself. Recommend the `200 + location` form for
-  the SPA's `fetch`, and reserve real `302` only if a no-JS/HTML-form fallback
-  is ever needed. **Confirm which the brief intends.**
+- **Settled: redirect is a real 302.** Decision (rlc): the federated redirect
+  is a genuine `302`, not a `200`-carrying-`location` that the SPA replays —
+  handling a redirect inside the React app is brittle and finicky. Reconciled
+  with the "can't read a cross-origin redirect out of `fetch`" concern by
+  never `fetch`-ing the redirect: `identify` returns a **same-origin**
+  `location` (`/api/v1/auth/authorize`), the SPA does a top-level
+  `window.location =` navigation to it, and *that* endpoint emits the real
+  `302` to the provider, which the browser follows natively. React never has to
+  catch or replay a cross-origin redirect.
 - **Session handling for the two-step (identify → password) flow.** An opaque
   server session token between the two calls, vs. re-sending the identifier.
   Opaque session is cleaner and doesn't echo the identifier back over the wire
