@@ -141,10 +141,17 @@ app deliberately, unaffected by how the app itself authenticates).
   `window.location =` navigation to it, and *that* endpoint emits the real
   `302` to the provider, which the browser follows natively. React never has to
   catch or replay a cross-origin redirect.
-- **Session handling for the two-step (identify → password) flow.** An opaque
-  server session token between the two calls, vs. re-sending the identifier.
-  Opaque session is cleaner and doesn't echo the identifier back over the wire
-  twice.
+- **Settled: session is a signed (JWS) self-contained token.** Decision (rlc):
+  the `session` passed between `identify` → `password`/`authorize` is a signed
+  **JWS** carrying the whole intermediate session state (resolved identifier,
+  chosen `method`, resolved federated provider, PKCE/state for the authorize
+  step, a short `exp`). Signed, not stored: the auth Lambda stays **stateless**
+  — no session table — and the client cannot alter the state and keep it valid.
+  Notes: JWS is signed, not encrypted, so its payload is readable by the client
+  — put no secrets in it (the identifier is the user's own; that's fine), and
+  keep the TTL short since it's an in-flight auth token. Signing key lives with
+  the auth Lambda (KMS asymmetric key, or a Secrets Manager HS256 secret);
+  KMS-asymmetric keeps the private key out of the function entirely.
 - **Federation config surface.** How a consumer declares "email domain X
   federates to OIDC provider Y" — a new module variable, and where the
   provider secrets live (Secrets Manager).
