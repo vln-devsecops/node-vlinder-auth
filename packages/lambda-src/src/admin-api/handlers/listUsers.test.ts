@@ -56,6 +56,40 @@ describe('listUsers', () => {
     ])
   })
 
+  it('skips role assignments whose Cognito user no longer exists', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-gone', tenantId: 'acme-corp', roleId: 'member' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' },
+      ],
+    })
+    const notFound = new Error('User does not exist.')
+    notFound.name = 'UserNotFoundException'
+    cognitoMock
+      .on(AdminGetUserCommand, { UserPoolId: 'us-east-1_example', Username: 'user-gone' })
+      .rejects(notFound)
+    cognitoMock
+      .on(AdminGetUserCommand, { UserPoolId: 'us-east-1_example', Username: 'user-1' })
+      .resolves({
+        Username: 'user-1',
+        Enabled: true,
+        UserStatus: 'CONFIRMED',
+        UserAttributes: [{ Name: 'email', Value: 'user1@acme.com' }],
+      })
+
+    const result = await listUsers({
+      caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:own'] },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    })
+
+    // One stale row (user deleted via console/CLI, assignment left behind)
+    // must not fail the whole listing.
+    expect(result.users.map((user) => user.userId)).toEqual(['user-1'])
+  })
+
   it('scans across all tenants when scoped to "global"', async () => {
     ddbMock.on(ScanCommand).resolves({
       Items: [

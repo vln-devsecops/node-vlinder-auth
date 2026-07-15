@@ -9,7 +9,7 @@ import {
   AdminGetUserCommand,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb'
+import { DynamoDBDocumentClient, PutCommand, GetCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb'
 
 export interface Env {
   baseUrl: string
@@ -237,16 +237,33 @@ export class AuthWorld extends World {
   }
 
   async cleanupUsers(): Promise<void> {
+    // Best-effort throughout: the whole ephemeral environment gets torn
+    // down shortly after anyway, but don't let cleanup failures fail the
+    // scenario that already passed or failed on its own merits.
     await Promise.all(
-      this.createdUsers.map((email) =>
-        this.cognito
+      this.createdUsers.map(async (email) => {
+        // Resolve the sub before deleting the Cognito user -- the role
+        // assignment is keyed by it, and it's unresolvable afterwards.
+        // Deleting the assignment is not just tidiness: listUsers hydrates
+        // every assignment against Cognito, and rows left behind by earlier
+        // scenarios poison every later scenario's admin-panel listing.
+        const userId = await this.getUserId(email).catch(() => null)
+
+        await this.cognito
           .send(new AdminDeleteUserCommand({ UserPoolId: this.env.userPoolId, Username: email }))
-          .catch(() => {
-            // Best-effort: the whole ephemeral environment gets torn down
-            // shortly after anyway, but don't let cleanup failures fail the
-            // scenario that already passed or failed on its own merits.
-          }),
-      ),
+          .catch(() => {})
+
+        if (userId && this.env.roleAssignmentsTableName) {
+          await this.ddb
+            .send(
+              new DeleteCommand({
+                TableName: this.env.roleAssignmentsTableName,
+                Key: { userId, tenantId: this.env.defaultTenantId },
+              }),
+            )
+            .catch(() => {})
+        }
+      }),
     )
     this.createdUsers = []
   }

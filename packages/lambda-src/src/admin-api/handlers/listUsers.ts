@@ -54,7 +54,7 @@ export async function listUsers(params: ListUsersParams): Promise<ListUsersResul
     assignments.map((assignment) => hydrateUser(assignment, cognitoClient, userPoolId)),
   )
 
-  return { users }
+  return { users: users.filter((user): user is AdminUserSummary => user !== null) }
 }
 
 async function queryTenantAssignments(
@@ -85,10 +85,22 @@ async function hydrateUser(
   assignment: { userId: string; tenantId: string; roleId: string },
   cognitoClient: CognitoIdentityProviderClient,
   userPoolId: string,
-): Promise<AdminUserSummary> {
-  const cognitoUser = await cognitoClient.send(
-    new AdminGetUserCommand({ UserPoolId: userPoolId, Username: assignment.userId }),
-  )
+): Promise<AdminUserSummary | null> {
+  let cognitoUser
+  try {
+    cognitoUser = await cognitoClient.send(
+      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: assignment.userId }),
+    )
+  } catch (error) {
+    // A role assignment can outlive its Cognito user (deleted via the
+    // console/CLI rather than the admin API). One stale row must not 500
+    // the entire listing -- caught live: the e2e suite's Cognito-only user
+    // cleanup left assignments behind and the whole admin panel went blank.
+    if (error instanceof Error && error.name === 'UserNotFoundException') {
+      return null
+    }
+    throw error
+  }
 
   const email = cognitoUser.UserAttributes?.find((attr) => attr.Name === 'email')?.Value
 
