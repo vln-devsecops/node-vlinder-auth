@@ -22,7 +22,9 @@ Then('I see the verify-email notice', async function (this: AuthWorld) {
     // Playwright's own assertion timeout defaults to 5s regardless of
     // cucumber's step timeout -- too tight for a real SignUp API round
     // trip, bump it explicitly.
-    await expect(this.page.getByText(/verification link/i)).toBeVisible({ timeout: 15000 })
+    // "We sent a..." specifically -- a bare /verification code/i would also
+    // match the ConfirmSignUpForm's label and trip Playwright strict mode.
+    await expect(this.page.getByText(/we sent a verification code/i)).toBeVisible({ timeout: 15000 })
   } catch (err) {
     // Surface a visible role="alert" error (a real SignUp API failure)
     // instead of just "element not found", which explains nothing.

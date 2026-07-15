@@ -5,6 +5,7 @@ import {
   SignUpForm,
   ForgotPasswordForm,
   VerifyEmailNotice,
+  ConfirmSignUpForm,
 } from '@vln-devsecops/auth-ui'
 import { buildInitiateAuthBody, parseAuthResult } from './authConfig'
 import { saveTokens } from './session'
@@ -66,6 +67,36 @@ async function signUp(
   }
 }
 
+async function confirmSignUp(clientId: string, email: string, code: string): Promise<void> {
+  const response = await fetch(IDP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-amz-json-1.1',
+      'X-Amz-Target': 'AWSCognitoIdentityProviderService.ConfirmSignUp',
+    },
+    body: JSON.stringify({ ClientId: clientId, Username: email, ConfirmationCode: code }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string }
+    throw new Error(body.message ?? `Verification failed: ${response.status}`)
+  }
+}
+
+async function resendConfirmationCode(clientId: string, email: string): Promise<void> {
+  const response = await fetch(IDP_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-amz-json-1.1',
+      'X-Amz-Target': 'AWSCognitoIdentityProviderService.ResendConfirmationCode',
+    },
+    body: JSON.stringify({ ClientId: clientId, Username: email }),
+  })
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { message?: string }
+    throw new Error(body.message ?? `Resend failed: ${response.status}`)
+  }
+}
+
 async function requestForgotPassword(clientId: string, email: string): Promise<void> {
   const response = await fetch(IDP_URL, {
     method: 'POST',
@@ -111,6 +142,7 @@ function App() {
   const [config, setConfig] = useState<SiteConfig | null>(null)
   const [configError, setConfigError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [pendingEmail, setPendingEmail] = useState('')
 
   useEffect(() => {
@@ -161,6 +193,17 @@ function App() {
     }
   }
 
+  const handleConfirmSignUp = async (code: string) => {
+    setError(null)
+    try {
+      await confirmSignUp(config.userPoolClientId, pendingEmail, code)
+      setNotice('Email verified. You can sign in now.')
+      setPage('signin')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Verification failed')
+    }
+  }
+
   const handleRequestCode = async (email: string) => {
     setError(null)
     setPendingEmail(email)
@@ -189,6 +232,7 @@ function App() {
   return (
     <div>
       {error && <p role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
 
       {page === 'signin' && (
         <>
@@ -216,7 +260,13 @@ function App() {
       )}
 
       {page === 'verify' && (
-        <VerifyEmailNotice email={pendingEmail} onResend={() => requestForgotPassword(config.userPoolClientId, pendingEmail)} />
+        <>
+          <VerifyEmailNotice
+            email={pendingEmail}
+            onResend={() => resendConfirmationCode(config.userPoolClientId, pendingEmail)}
+          />
+          <ConfirmSignUpForm onConfirm={handleConfirmSignUp} />
+        </>
       )}
     </div>
   )

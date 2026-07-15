@@ -25,12 +25,13 @@ function buildEvent(): PreTokenGenerationV2TriggerEvent {
       groupConfiguration: {},
     },
     response: {
-      claimsAndScopeOverrideDetails: {
-        idTokenGeneration: {},
-        accessTokenGeneration: {},
-      },
+      // Cognito really does send this as null in the live V2 event -- the
+      // trigger must construct the whole object. A pre-populated fixture
+      // here hid a null-dereference crash that only surfaced in the live
+      // e2e suite; keep this matching reality.
+      claimsAndScopeOverrideDetails: null,
     },
-  } as PreTokenGenerationV2TriggerEvent
+  } as unknown as PreTokenGenerationV2TriggerEvent
 }
 
 beforeEach(() => {
@@ -91,7 +92,7 @@ describe('pre-token-generation handler', () => {
     const result = await handler(buildEvent())
 
     expect(
-      result.response.claimsAndScopeOverrideDetails.idTokenGeneration?.claimsToAddOrOverride,
+      result.response.claimsAndScopeOverrideDetails?.idTokenGeneration?.claimsToAddOrOverride,
     ).toBeUndefined()
   })
 

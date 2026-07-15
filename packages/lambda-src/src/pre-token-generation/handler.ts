@@ -32,13 +32,21 @@ export async function handler(
       tenantId: resolved.tenantId,
     }
 
-    event.response.claimsAndScopeOverrideDetails.idTokenGeneration = {
-      ...event.response.claimsAndScopeOverrideDetails.idTokenGeneration,
-      claimsToAddOrOverride: claims,
-    }
-    event.response.claimsAndScopeOverrideDetails.accessTokenGeneration = {
-      ...event.response.claimsAndScopeOverrideDetails.accessTokenGeneration,
-      claimsToAddOrOverride: claims,
+    // Cognito delivers claimsAndScopeOverrideDetails as null in the real V2
+    // event -- the trigger is expected to construct the whole object, and
+    // reading a property off it before doing so crashes the handler (caught
+    // live: "Cannot read properties of null (reading 'idTokenGeneration')").
+    const existing = event.response.claimsAndScopeOverrideDetails ?? {}
+    event.response.claimsAndScopeOverrideDetails = {
+      ...existing,
+      idTokenGeneration: {
+        ...existing.idTokenGeneration,
+        claimsToAddOrOverride: claims,
+      },
+      accessTokenGeneration: {
+        ...existing.accessTokenGeneration,
+        claimsToAddOrOverride: claims,
+      },
     }
   }
 

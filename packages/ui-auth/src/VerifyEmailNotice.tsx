@@ -19,7 +19,7 @@ export function VerifyEmailNotice(props: VerifyEmailNoticeProps) {
   return (
     <div style={{ fontFamily: theme.fontFamily }}>
       <p>
-        We sent a verification link to <strong>{props.email}</strong>. Check your inbox to
+        We sent a verification code to <strong>{props.email}</strong>. Enter it below to
         finish signing up.
       </p>
       <button onClick={handleResend} style={{ backgroundColor: theme.primaryColor }}>

@@ -7,6 +7,9 @@ export type { SignInButtonProps } from './SignInButton'
 export { VerifyEmailNotice } from './VerifyEmailNotice'
 export type { VerifyEmailNoticeProps } from './VerifyEmailNotice'
 
+export { ConfirmSignUpForm } from './ConfirmSignUpForm'
+export type { ConfirmSignUpFormProps } from './ConfirmSignUpForm'
+
 export { ForgotPasswordForm } from './ForgotPasswordForm'
 export type { ConfirmResetValues, ForgotPasswordFormProps } from './ForgotPasswordForm'
 
