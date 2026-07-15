@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   const multiTenant = isMultiTenant(config.multiTenant)
 
   const apiClient = createAdminApiClient({
-    baseUrl: '/admin/api',
+    baseUrl: '/api/v1',
     getAccessToken: () => tokens.accessToken,
   })
 

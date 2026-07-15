@@ -13,7 +13,7 @@ import { loadConfig, type SiteConfig } from './config'
 
 type Page = 'signin' | 'signup' | 'forgot' | 'verify'
 
-const IDP_URL = '/idp'
+const IDP_URL = '/api/v1/idp'
 
 async function signIn(
   clientId: string,

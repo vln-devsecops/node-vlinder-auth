@@ -28,11 +28,15 @@ There is deliberately no Cognito Hosted UI — the module owns its own login and
 admin experience and calls Cognito's regional IDP API as a same-origin proxy
 instead.
 
+All API traffic is namespaced under `/api/v1`. The IDP proxy and the admin
+API share that prefix; `/api/v1/idp*` is a higher-precedence behavior than
+`/api/v1/*`, so IDP requests never fall through to the admin API.
+
 ```
                          auth.<zone>  (CloudFront: aws_cloudfront_distribution.auth_site)
                                  │
         ┌────────────────────────┼────────────────────────────────────┐
-        │ default behavior       │ /idp*                    │ /admin/api/*
+        │ default behavior       │ /api/v1/idp*             │ /api/v1/*
         │ (S3 origin, OAC)       │ (custom origin)          │ (custom origin)
         ▼                        ▼                          ▼
    S3: the SPA build       cognito-idp.<region>        aws/http_api
@@ -41,7 +45,7 @@ instead.
                                                              │
    spa_viewer_request      idp_proxy_rewrite           admin_api_rewrite
    CF function:            CF function:                 CF function:
-   route extensionless     strip /idp prefix,          strip /admin/api
+   route extensionless     strip /api/v1/idp,          strip /api/v1
    paths to the right      re-set X-Amz-Target*        prefix
    index.html
 ```
@@ -52,25 +56,30 @@ instead.
   rewrites extensionless paths to the correct `index.html` (`/admin*` →
   `/admin/index.html`, everything else → `/index.html`) so client-side routing
   works. TTL is normal for static assets.
-- **`/idp*` → Cognito IDP API.** The SPA calls Cognito's JSON-RPC IDP API
-  (`InitiateAuth`, `SignUp`, `ConfirmSignUp`, `ForgotPassword`, …) same-origin
-  through CloudFront, so there is no CORS and no hosted redirect. TTL 0, never
-  cached. `*` A CloudFront Function strips the `/idp` prefix and re-sets the
-  `X-Amz-Target` header — CloudFront's origin-header allowlist rejects any
-  `X-Amz-*` header name at config time, so the header the IDP API routes on is
-  reapplied inside the function, which is not subject to that restriction.
-- **`/admin/api/*` → admin API.** The bundled admin HTTP API (built via the
+- **`/api/v1/idp*` → Cognito IDP API.** The SPA calls Cognito's JSON-RPC IDP
+  API (`InitiateAuth`, `SignUp`, `ConfirmSignUp`, `ForgotPassword`, …)
+  same-origin through CloudFront, so there is no CORS and no hosted redirect.
+  TTL 0, never cached. `*` A CloudFront Function strips the `/api/v1/idp`
+  prefix and re-sets the `X-Amz-Target` header — CloudFront's origin-header
+  allowlist rejects any `X-Amz-*` header name at config time, so the header
+  the IDP API routes on is reapplied inside the function, which is not subject
+  to that restriction. (When the frontend is made vendor-neutral — see the
+  migration plan in [`doc/vendor-neutral-auth.md`](./vendor-neutral-auth.md) —
+  this IDP proxy is replaced by a first-party auth API under `/api/v1/auth`.)
+- **`/api/v1/*` → admin API.** The bundled admin HTTP API (built via the
   shared `aws/http_api` module, protected by a JWT authorizer pointed at this
-  pool). Same-origin, TTL 0. Only provisioned when `create_admin_panel = true`
-  (the default). A CloudFront Function strips the `/admin/api` prefix.
+  pool). Pure REST routes (`GET /users`, `PATCH /users/{userId}/enabled`,
+  `PUT /users/{userId}/role`, …). Same-origin, TTL 0. Only provisioned when
+  `create_admin_panel = true` (the default). A CloudFront Function strips the
+  `/api/v1` prefix.
 
 The SPA's built assets are **not** managed by Terraform. `terraform apply`
 creates the bucket and a placeholder `index.html`; a deploy step
 (`packages/auth-site/scripts/deploy.sh`) builds the SPA, writes a runtime
 `config.json` (the Cognito app-client id and a multi-tenant flag — the only
-values that vary per deployment), and `aws s3 sync`s it to the bucket. API
-paths (`/idp`, `/admin/api`) are fixed infrastructure constants baked into the
-SPA, never config.
+values that vary per deployment), and `aws s3 sync`s it to the bucket. The
+`/api/v1` prefix and its sub-paths are fixed infrastructure constants baked
+into the SPA, never config.
 
 ## Authentication model
 
