@@ -38,6 +38,8 @@ async function signUp(
   clientId: string,
   email: string,
   password: string,
+  givenName: string,
+  familyName: string,
 ): Promise<void> {
   const response = await fetch(IDP_URL, {
     method: 'POST',
@@ -45,7 +47,18 @@ async function signUp(
       'Content-Type': 'application/x-amz-json-1.1',
       'X-Amz-Target': 'AWSCognitoIdentityProviderService.SignUp',
     },
-    body: JSON.stringify({ ClientId: clientId, Username: email, Password: password }),
+    body: JSON.stringify({
+      ClientId: clientId,
+      Username: email,
+      Password: password,
+      // given_name/family_name are required attributes in cognito_auth's
+      // user pool schema (doxchange-derived) -- SignUp is rejected without
+      // them.
+      UserAttributes: [
+        { Name: 'given_name', Value: givenName },
+        { Name: 'family_name', Value: familyName },
+      ],
+    }),
   })
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { message?: string }
@@ -126,10 +139,21 @@ function App() {
     }
   }
 
-  const handleSignUp = async (values: { email: string; password: string }) => {
+  const handleSignUp = async (values: {
+    email: string
+    password: string
+    givenName: string
+    familyName: string
+  }) => {
     setError(null)
     try {
-      await signUp(config.userPoolClientId, values.email, values.password)
+      await signUp(
+        config.userPoolClientId,
+        values.email,
+        values.password,
+        values.givenName,
+        values.familyName,
+      )
       setPendingEmail(values.email)
       setPage('verify')
     } catch (e: unknown) {

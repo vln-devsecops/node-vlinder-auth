@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { SignUpForm } from './SignUpForm'
 
 describe('SignUpForm', () => {
-  it('renders email, password, and confirm-password fields', () => {
+  it('renders email, name, password, and confirm-password fields', () => {
     render(<SignUpForm onSubmit={vi.fn()} />)
 
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/first name/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/last name/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/confirm password/i)).toBeInTheDocument()
   })
@@ -22,11 +24,26 @@ describe('SignUpForm', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  it('rejects a missing first name', async () => {
+    const onSubmit = vi.fn()
+    render(<SignUpForm onSubmit={onSubmit} />)
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'jane@example.com')
+    await userEvent.type(screen.getByLabelText(/^password$/i), 'correct-horse-battery')
+    await userEvent.type(screen.getByLabelText(/confirm password/i), 'correct-horse-battery')
+    await userEvent.click(screen.getByRole('button', { name: /sign up/i }))
+
+    expect(await screen.findByText(/first name is required/i)).toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('rejects a password shorter than 8 characters', async () => {
     const onSubmit = vi.fn()
     render(<SignUpForm onSubmit={onSubmit} />)
 
     await userEvent.type(screen.getByLabelText(/email/i), 'jane@example.com')
+    await userEvent.type(screen.getByLabelText(/first name/i), 'Jane')
+    await userEvent.type(screen.getByLabelText(/last name/i), 'Doe')
     await userEvent.type(screen.getByLabelText(/^password$/i), 'short')
     await userEvent.type(screen.getByLabelText(/confirm password/i), 'short')
     await userEvent.click(screen.getByRole('button', { name: /sign up/i }))
@@ -40,6 +57,8 @@ describe('SignUpForm', () => {
     render(<SignUpForm onSubmit={onSubmit} />)
 
     await userEvent.type(screen.getByLabelText(/email/i), 'jane@example.com')
+    await userEvent.type(screen.getByLabelText(/first name/i), 'Jane')
+    await userEvent.type(screen.getByLabelText(/last name/i), 'Doe')
     await userEvent.type(screen.getByLabelText(/^password$/i), 'correct-horse-battery')
     await userEvent.type(screen.getByLabelText(/confirm password/i), 'different-password')
     await userEvent.click(screen.getByRole('button', { name: /sign up/i }))
@@ -53,6 +72,8 @@ describe('SignUpForm', () => {
     render(<SignUpForm onSubmit={onSubmit} />)
 
     await userEvent.type(screen.getByLabelText(/email/i), 'jane@example.com')
+    await userEvent.type(screen.getByLabelText(/first name/i), 'Jane')
+    await userEvent.type(screen.getByLabelText(/last name/i), 'Doe')
     await userEvent.type(screen.getByLabelText(/^password$/i), 'correct-horse-battery')
     await userEvent.type(screen.getByLabelText(/confirm password/i), 'correct-horse-battery')
     await userEvent.click(screen.getByRole('button', { name: /sign up/i }))
@@ -60,6 +81,8 @@ describe('SignUpForm', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       email: 'jane@example.com',
       password: 'correct-horse-battery',
+      givenName: 'Jane',
+      familyName: 'Doe',
     })
   })
 

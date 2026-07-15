@@ -10,6 +10,8 @@ When('I sign up with a new email and password', async function (this: AuthWorld)
 
   await this.page.getByRole('button', { name: 'Create account' }).click()
   await this.page.getByLabel('Email').fill(email)
+  await this.page.getByLabel('First name').fill('E2e')
+  await this.page.getByLabel('Last name').fill('Tester')
   await this.page.getByLabel('Password', { exact: true }).fill(TEST_PASSWORD)
   await this.page.getByLabel('Confirm password').fill(TEST_PASSWORD)
   await this.page.getByRole('button', { name: 'Sign up' }).click()

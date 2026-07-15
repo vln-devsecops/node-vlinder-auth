@@ -4,6 +4,8 @@ import { resolveTheme, type VlinderAuthTheme } from './theme'
 export interface SignUpFormValues {
   email: string
   password: string
+  givenName: string
+  familyName: string
 }
 
 export interface SignUpFormProps {
@@ -13,9 +15,24 @@ export interface SignUpFormProps {
 
 const MIN_PASSWORD_LENGTH = 8
 
-function validate(email: string, password: string, confirmPassword: string): string | undefined {
+function validate(
+  email: string,
+  password: string,
+  confirmPassword: string,
+  givenName: string,
+  familyName: string,
+): string | undefined {
   if (!email.trim()) {
     return 'Email is required.'
+  }
+  // given_name/family_name are required attributes in cognito_auth's user
+  // pool schema (doxchange-derived contract) -- Cognito rejects a SignUp
+  // without them, so catch it client-side with a friendlier message.
+  if (!givenName.trim()) {
+    return 'First name is required.'
+  }
+  if (!familyName.trim()) {
+    return 'Last name is required.'
   }
   if (!password) {
     return 'Password is required.'
@@ -33,16 +50,18 @@ function validate(email: string, password: string, confirmPassword: string): str
 export function SignUpForm(props: SignUpFormProps) {
   const theme = resolveTheme(props.theme)
   const [email, setEmail] = useState('')
+  const [givenName, setGivenName] = useState('')
+  const [familyName, setFamilyName] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | undefined>(undefined)
 
   const handleSubmit = (event: FormEvent): void => {
     event.preventDefault()
-    const validationError = validate(email, password, confirmPassword)
+    const validationError = validate(email, password, confirmPassword, givenName, familyName)
     setError(validationError)
     if (!validationError) {
-      void props.onSubmit({ email, password })
+      void props.onSubmit({ email, password, givenName, familyName })
     }
   }
 
@@ -54,6 +73,24 @@ export function SignUpForm(props: SignUpFormProps) {
         type="email"
         value={email}
         onChange={(event) => setEmail(event.target.value)}
+      />
+
+      <label htmlFor="signup-given-name">First name</label>
+      <input
+        id="signup-given-name"
+        type="text"
+        autoComplete="given-name"
+        value={givenName}
+        onChange={(event) => setGivenName(event.target.value)}
+      />
+
+      <label htmlFor="signup-family-name">Last name</label>
+      <input
+        id="signup-family-name"
+        type="text"
+        autoComplete="family-name"
+        value={familyName}
+        onChange={(event) => setFamilyName(event.target.value)}
       />
 
       <label htmlFor="signup-password">Password</label>
