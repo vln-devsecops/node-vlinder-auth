@@ -16,7 +16,23 @@ When('I sign up with a new email and password', async function (this: AuthWorld)
 })
 
 Then('I see the verify-email notice', async function (this: AuthWorld) {
-  await expect(this.page.getByText(/verification link/i)).toBeVisible()
+  try {
+    // Playwright's own assertion timeout defaults to 5s regardless of
+    // cucumber's step timeout -- too tight for a real SignUp API round
+    // trip, bump it explicitly.
+    await expect(this.page.getByText(/verification link/i)).toBeVisible({ timeout: 15000 })
+  } catch (err) {
+    // Surface a visible role="alert" error (a real SignUp API failure)
+    // instead of just "element not found", which explains nothing.
+    const alertText = await this.page
+      .getByRole('alert')
+      .textContent()
+      .catch(() => null)
+    if (alertText) {
+      throw new Error(`Sign-up did not show the verify notice; page showed: "${alertText}"`)
+    }
+    throw err
+  }
 })
 
 When('the account is confirmed', async function (this: AuthWorld) {

@@ -3,16 +3,15 @@ import { expect } from '@playwright/test'
 import type { AuthWorld } from '../support/world'
 import { pollUntil } from '../support/poll'
 import { TEST_PASSWORD } from './common.steps'
+import { fillSignInForm, waitForAdminRedirect } from '../support/actions'
 
 Given('I am signed in as an admin', async function (this: AuthWorld) {
   this.testUser = await this.createConfirmedTestUser('admin', TEST_PASSWORD)
   await this.seedRoleAssignment(this.testUser.userId, 'admin')
 
   await this.page.goto('/')
-  await this.page.getByLabel('Email').fill(this.testUser.email)
-  await this.page.getByLabel('Password').fill(this.testUser.password)
-  await this.page.getByRole('button', { name: 'Sign in' }).click()
-  await this.page.waitForURL('**/admin', { timeout: 15000 })
+  await fillSignInForm(this, this.testUser.email, this.testUser.password)
+  await waitForAdminRedirect(this)
 })
 
 // Deliberately seeded with "member" (no admin privileges) -- this is the

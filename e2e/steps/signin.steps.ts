@@ -1,12 +1,7 @@
 import { When, Then } from '@cucumber/cucumber'
 import { expect } from '@playwright/test'
 import type { AuthWorld } from '../support/world'
-
-async function fillSignInForm(world: AuthWorld, email: string, password: string): Promise<void> {
-  await world.page.getByLabel('Email').fill(email)
-  await world.page.getByLabel('Password').fill(password)
-  await world.page.getByRole('button', { name: 'Sign in' }).click()
-}
+import { fillSignInForm, waitForAdminRedirect } from '../support/actions'
 
 When('I sign in with valid credentials', async function (this: AuthWorld) {
   if (!this.testUser) {
@@ -23,7 +18,7 @@ When('I sign in with an incorrect password', async function (this: AuthWorld) {
 })
 
 Then('I am redirected to the admin panel', async function (this: AuthWorld) {
-  await this.page.waitForURL('**/admin', { timeout: 15000 })
+  await waitForAdminRedirect(this)
 })
 
 Then('the user table is visible', async function (this: AuthWorld) {
