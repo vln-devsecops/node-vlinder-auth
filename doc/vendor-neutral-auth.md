@@ -36,6 +36,29 @@ This is standard **home-realm discovery / identifier-first** login. Cognito
 supports the pieces (hosted federation, `AdminInitiateAuth`, managed login),
 but the point is the *frontend contract* is ours, not Cognito's.
 
+### Signup may optionally offer other IdPs
+
+Signup is not local-only. When federation providers are configured **and
+flagged "offer at self-signup,"** the signup screen shows "Continue with
+&lt;provider&gt;" buttons alongside the local email/password form — local
+signup always remains available; the IdP buttons are additive and appear only
+when such a provider exists (hence *optional*). Two ways a user reaches a
+provider at registration time:
+
+- **Explicit button** (a social/broad provider, no identifier typed yet):
+  clicking "Continue with X" navigates straight to `/api/v1/auth/authorize`
+  for that provider with `intent=signup` — the same real-`302` machinery as
+  login, just chosen directly instead of resolved from an identifier.
+- **Domain-mapped, via identifier-first** (an enterprise realm): a user who
+  types an email in a federated domain is redirected to their IdP by the login
+  flow above; if no account exists yet, the callback **provisions one**
+  (just-in-time), so "log in" and "sign up" converge for domain-bound realms.
+
+Either way the federated callback, on a user that doesn't exist yet, runs the
+same provisioning the local `post-confirmation` trigger does today (resolve
+tenant, seed the initial role assignment), so a federated signup lands in the
+exact same RBAC state as a local one.
+
 ## Proposed API contract (`/api/v1/auth`)
 
 A new REST-ish surface under the existing `/api/v1` prefix, served by a new
@@ -49,21 +72,33 @@ get a token in the first place). Illustrative, to be firmed up:
   → `200 { "method": "redirect", "location": "/api/v1/auth/authorize?session=<opaque>" }`
     — the `location` is **same-origin**; the frontend does
     `window.location = location`.
-- `GET /api/v1/auth/authorize?session=<opaque>`
-  The genuine redirect. Looks up the resolved federated provider for the
-  session and answers **`302`** with `Location:` set to the provider's
-  `/authorize?...` (client_id, redirect_uri back to our callback, state, PKCE).
-  Because this is a top-level browser navigation to a same-origin endpoint, the
-  browser follows the cross-origin `302` natively — no `fetch`, no React
-  redirect handling.
+- `GET /api/v1/auth/authorize?session=<opaque>` **or**
+  `?provider=<id>&intent=signup`
+  The genuine redirect. Either resolves the federated provider from the
+  identify `session` (login/domain-mapped case) or takes a directly-chosen
+  `provider` with `intent=signup` (the signup-screen button case). Answers
+  **`302`** with `Location:` set to the provider's `/authorize?...` (client_id,
+  redirect_uri back to our callback, state, PKCE). The `intent` is carried in
+  the signed `state`/session so the callback knows whether to require an
+  existing account or provision a new one. Because this is a top-level browser
+  navigation to a same-origin endpoint, the browser follows the cross-origin
+  `302` natively — no `fetch`, no React redirect handling.
 - `POST /api/v1/auth/password`
   Body: `{ "session": "<opaque>", "password": "..." }`
   → `200 { "tokens": { accessToken, idToken, refreshToken, expiresAt } }`
   → `200 { "challenge": "NEW_PASSWORD_REQUIRED", ... }` for MFA/new-password
     challenges (the backend owns challenge orchestration, not the SPA).
 - `POST /api/v1/auth/callback` (or a GET redirect target)
-  Completes a federated login: exchanges the provider's code for tokens,
-  returns them in the same vendor-neutral `tokens` shape.
+  Completes a federated login **or signup**: exchanges the provider's code for
+  tokens. If the identity is new (and `intent=signup`, or JIT provisioning is
+  enabled for a domain-mapped realm), it provisions the user first — the same
+  tenant-resolution + initial-role-assignment the local `post-confirmation`
+  trigger performs — then returns tokens in the same vendor-neutral `tokens`
+  shape. If the identity already exists it just signs them in.
+- `GET /api/v1/auth/providers`
+  Public. Returns the providers flagged "offer at self-signup" as
+  `[{ id, label }]` (no secrets) so the signup screen knows which "Continue
+  with …" buttons to render. Empty list → signup stays local-only.
 - `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` — round out the
   lifecycle.
 - Signup/verify/forgot-password move here too
@@ -96,7 +131,11 @@ calls in `main.tsx`/`authConfig.ts`. The SPA becomes: collect identifier →
 vendor-neutral tokens. `authConfig.ts`'s `buildInitiateAuthBody` /
 `parseAuthResult` (Cognito-shaped) are deleted. `ui-auth` components stay
 mostly as-is (they already emit plain `{ email, password }` callbacks); a new
-identifier-first entry component may be warranted.
+identifier-first entry component may be warranted. The **signup screen** calls
+`GET /api/v1/auth/providers` and renders a "Continue with …" button per
+returned provider above the local form (each button → top-level nav to
+`/api/v1/auth/authorize?provider=<id>&intent=signup`); with an empty list the
+buttons simply don't render and signup is local-only.
 
 **`terraform-modules/modules/aws/cognito_auth`** —
 - Add the auth Lambda + its `aws/http_api` routes under `/api/v1/auth`
@@ -162,8 +201,11 @@ app deliberately, unaffected by how the app itself authenticates).
   - **Add / edit provider form:** display name; OIDC **discovery URL**
     (`…/.well-known/openid-configuration`); client id; **client secret**
     (write-only field — stored in Secrets Manager, never read back, rendered as
-    "••• set" with a "replace" action); scopes; and the email domain(s) mapped
-    to this provider.
+    "••• set" with a "replace" action); scopes; the email domain(s) mapped to
+    this provider; and an **"offer at self-signup"** toggle (plus button label)
+    that controls whether it appears as a "Continue with …" button on the
+    signup screen — off by default, so domain-bound enterprise realms stay
+    login-only unless an admin opts them in.
   - **Validation:** on save the auth/admin backend fetches the discovery URL to
     confirm it resolves, and enforces domain-mapping uniqueness (one domain →
     one provider).
@@ -216,3 +258,16 @@ app deliberately, unaffected by how the app itself authenticates).
   the authorizer to read a cookie, not a Bearer header), so both changes land
   together in the federation increment — noted, not blocking the first
   password-flow increment.
+- **Account linking / collision policy (federated signup).** When a federated
+  signup returns an email that already has a *local* account (or a different
+  provider's account) — e.g. someone signed up locally as `jane@x.com` then
+  later "Continue with Google" as the same address — what happens: link to the
+  existing account (convenient, but linking on unverified email is an account-
+  takeover vector), reject with "account exists, sign in instead," or keep them
+  separate. Safe default: **only auto-link when the provider asserts a verified
+  email matching an existing verified account; otherwise reject and route to
+  sign-in.** Confirm before building the callback provisioning.
+- **JIT provisioning default for domain-mapped realms.** For an enterprise
+  realm, does a first-time federated *login* auto-provision the user (JIT), or
+  must they have been pre-created/invited? JIT is the low-friction default and
+  matches "log in and sign up converge"; an invite-only mode is a later opt-in.
