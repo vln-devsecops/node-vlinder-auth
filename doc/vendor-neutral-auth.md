@@ -20,10 +20,10 @@ behind that API, swappable later without touching the frontend.
 2. **Backend resolves the identity provider** tied to that account and tells
    the frontend how to proceed:
    - **Federated IdP** → the identify response tells the frontend to make a
-     **top-level browser navigation** to a same-origin authorize endpoint
-     (`/api/v1/auth/authorize`), which answers with a **real `302`** to the
-     provider. The frontend does not know the vendor and never handles the
-     cross-origin redirect itself — it just sets `window.location`.
+     **top-level browser navigation** to a same-origin endpoint
+     (`/api/v1/auth/federation/start`), which answers with a **real `302`** to
+     the external IdP. The frontend does not know the vendor and never handles
+     the cross-origin redirect itself — it just sets `window.location`.
    - **Local password** → the response tells the frontend to prompt for a
      password, which it submits back to the same API (a plain `fetch`, no
      navigation).
@@ -32,9 +32,12 @@ behind that API, swappable later without touching the frontend.
      is where the genuine **`302`** happens. See "Settled: redirect is a real
      302" below.
 
-This is standard **home-realm discovery / identifier-first** login. Cognito
-supports the pieces (hosted federation, `AdminInitiateAuth`, managed login),
-but the point is the *frontend contract* is ours, not Cognito's.
+This is standard **home-realm discovery / identifier-first** login. Cognito's
+own hosted **Managed Login cannot reproduce this UX** (it shows a single
+combined username+password+IdP-buttons screen with no email-domain home-realm
+routing), so keeping this flow **commits us to our own UI** driven by Cognito's
+IDP API — see "Platform decision: own UI, not Managed Login" below, which is
+the fork the rest of this plan resolves around.
 
 ### Signup may optionally offer other IdPs
 
@@ -46,9 +49,10 @@ when such a provider exists (hence *optional*). Two ways a user reaches a
 provider at registration time:
 
 - **Explicit button** (a social/broad provider, no identifier typed yet):
-  clicking "Continue with X" navigates straight to `/api/v1/auth/authorize`
-  for that provider with `intent=signup` — the same real-`302` machinery as
-  login, just chosen directly instead of resolved from an identifier.
+  clicking "Continue with X" navigates straight to
+  `/api/v1/auth/federation/start` for that provider with `intent=signup` — the
+  same real-`302` machinery as login, just chosen directly instead of resolved
+  from an identifier.
 - **Domain-mapped, via identifier-first** (an enterprise realm): a user who
   types an email in a federated domain is redirected to their IdP by the login
   flow above; if no account exists yet, the callback **provisions one**
@@ -59,73 +63,144 @@ same provisioning the local `post-confirmation` trigger does today (resolve
 tenant, seed the initial role assignment), so a federated signup lands in the
 exact same RBAC state as a local one.
 
+## Platform decision: own UI, not Managed Login (resolved)
+
+The one big fork behind everything below. Two ways to be OIDC-capable on top of
+Cognito:
+
+- **Cognito Managed Login** (its hosted pages) gives the full OIDC
+  authorization endpoint and native federation for near-zero code — but it is a
+  hosted redirect page, it can only be *themed* not *rebuilt*, and crucially it
+  **cannot reproduce our identifier-first UX** (no email-domain home-realm
+  discovery; combined single-screen form). Keeping our UX rules it out.
+- **Own UI on the IDP API** (`InitiateAuth`/`AdminInitiateAuth`, what we do
+  today) keeps our exact flow and stays frontend-vendor-neutral. The cost:
+  Cognito's hosted-only features (the `/oauth2/authorize` endpoint and native
+  federation) are unavailable, so **we build those interactive parts
+  ourselves**.
+
+**Decision (rlc): own UI.** Concretely that means:
+
+1. **RP token delivery → BFF path.** The auth component is an authorization
+   server with a slim, single-client-per-config `/authorize` + `/token`
+   handoff (one-time code + PKCE, `redirect_uri` allowlist). The consuming app's
+   backend (BFF) exchanges the code server-to-server and holds the tokens,
+   setting its own httpOnly cookie on *its* origin. No token ever touches
+   browser JS. This needs no Cognito hosted domain and no full OIDC-provider
+   machinery (no client registry, no consent, no self-signed tokens — see
+   below).
+2. **Federation → self-driven, Cognito as directory.** Because Cognito-native
+   federation is hosted-bound, the auth Lambda acts as the OIDC *client* to the
+   external IdP itself (drives its `/authorize` + code exchange), then
+   provisions/links the user in Cognito as a native directory record
+   (`AdminCreateUser` + identity mapping). Cognito stops being the federator; it
+   stays the user store.
+
+### What Cognito still buys us under own UI (why keep it)
+
+Even reduced to "own UI + thin handoff + self-driven federation," Cognito still
+provides the **security-critical primitives you don't want to hand-roll**, so
+the build stays small and the risk low:
+
+- **Password storage & verification** (hashing/SRP/policies — the classic
+  don't-roll-your-own surface).
+- **Token signing + JWKS + key rotation.** `InitiateAuth` returns
+  **OIDC-valid, Cognito-signed** ID/access tokens and Cognito publishes/rotates
+  the JWKS. So our `/token` handoff **returns Cognito's tokens** — we are *not*
+  a token-minting OP, not managing signing keys. This is what keeps "our own
+  OIDC" thin.
+- **MFA**, the **sign-up / email-verification / forgot-password state
+  machines**, **advanced security** (compromised-credential/adaptive/lockout),
+  **refresh-token lifecycle**, the **user directory + groups**, and our
+  **Lambda triggers** (pre-token-generation for claims, post-confirmation for
+  provisioning — the RBAC seam).
+
+What Cognito *stops* buying us is exactly what we opt out of: the hosted UI, the
+interactive `/oauth2/authorize` endpoint, and native federation. That narrows
+its value to "a hardened credential store + token signer + auth state machines +
+trigger hooks" — real value, but worth naming. The `/api/v1/auth` abstraction is
+what preserves the exit: because the SPA and RPs speak *our* contract, the
+engine behind it (Cognito today; Keycloak/Ory/WorkOS/… later) can be swapped
+without touching the UI or the RPs.
+
 ## Proposed API contract (`/api/v1/auth`)
 
-A new REST-ish surface under the existing `/api/v1` prefix, served by a new
-**auth Lambda** (sibling to the admin-api Lambda, same `aws/http_api`
-pattern — but on **public** routes, no JWT authorizer, since this is how you
-get a token in the first place). Illustrative, to be firmed up:
+A new surface under the existing `/api/v1` prefix, served by a new **auth
+Lambda** (sibling to the admin-api Lambda, same `aws/http_api` pattern, public
+routes). It has three layers. Illustrative, to be firmed up.
+
+**Layer 1 — RP-facing (the BFF handoff).** How a consuming app at another
+origin gets tokens. This is the slim authorization-server surface.
+
+- `GET /api/v1/auth/authorize`
+  Query: `client_id`, `redirect_uri` (**matched against a config allowlist**),
+  `state`, `code_challenge` (PKCE). Entry point the app's BFF sends the browser
+  to. Runs the branded login UI below; on success mints a **one-time code**
+  bound to `(user, redirect_uri, code_challenge)` and **`302`s back** to
+  `redirect_uri?code=…&state=…`. (If the AS session cookie already proves an
+  authenticated browser, this can complete **silently** — that's SSO.)
+- `POST /api/v1/auth/token`
+  Back channel, called server-to-server by the BFF (not the browser). Body:
+  `{ code, code_verifier, client_secret? }`. Validates the one-time code + PKCE,
+  returns the **Cognito-signed, OIDC-valid** `{ access, id, refresh, expiresAt }`.
+  The BFF holds these and sets its own httpOnly cookie on its origin.
+
+**Layer 2 — login-UI-facing (our SPA on `auth.<zone>`).** What `/authorize`
+drives; the browser only ever talks to these same-origin.
 
 - `POST /api/v1/auth/identify`
-  Body: `{ "identifier": "jane@example.com" }`
-  The identify `session` JWS is returned as a short-lived `HttpOnly` cookie
-  (`Set-Cookie`), not in the body — see the token-storage decision below.
+  Body: `{ "identifier": "jane@example.com" }`. The identify `session` JWS is
+  returned as a short-lived `HttpOnly` cookie, not in the body.
   → `200 { "method": "password" }` — prompt for password.
-  → `200 { "method": "redirect", "location": "/api/v1/auth/authorize" }`
-    — the `location` is **same-origin**; the frontend does
-    `window.location = location`.
-- `GET /api/v1/auth/authorize` (reads the identify `session` cookie) **or**
-  `?provider=<id>&intent=signup`
-  The genuine redirect. Either resolves the federated provider from the
-  identify `session` cookie (login/domain-mapped case) or takes a
-  directly-chosen `provider` with `intent=signup` (the signup-screen button
-  case). Answers
-  **`302`** with `Location:` set to the provider's `/authorize?...` (client_id,
-  redirect_uri back to our callback, state, PKCE). The `intent` is carried in
-  the signed `state`/session so the callback knows whether to require an
-  existing account or provision a new one. Because this is a top-level browser
-  navigation to a same-origin endpoint, the browser follows the cross-origin
-  `302` natively — no `fetch`, no React redirect handling.
-- `POST /api/v1/auth/password` *(response shape pending the RP-model decision —
-  see the token-delivery correction below)*
-  Body: `{ "password": "..." }` (the identify `session` rides its cookie).
-  Establishes the **AS session** (httpOnly cookie on `auth.<zone>`). How the
-  resulting tokens reach the consuming app depends on the RP model: for a
-  cross-origin RP the flow continues an authorization-code redirect to the RP;
-  only a same-origin consumer (the admin panel) can rely on the AS session
-  cookie directly.
-  → `200 { "challenge": "NEW_PASSWORD_REQUIRED", ... }` for MFA/new-password
-    challenges (the backend owns challenge orchestration, not the SPA).
-- `POST /api/v1/auth/callback` (or a GET redirect target) *(token-delivery
-  pending the RP-model decision)*
-  Completes a federated login **or signup**: exchanges the provider's code for
-  tokens. If the identity is new (and `intent=signup`, or JIT provisioning is
-  enabled for a domain-mapped realm), it provisions the user first — the same
-  tenant-resolution + initial-role-assignment the local `post-confirmation`
-  trigger performs — then establishes the AS session and hands the app its
-  tokens per the chosen RP model (cross-origin auth-code redirect for a general
-  RP). If the identity already exists it just signs them in.
-- `GET /api/v1/auth/providers`
-  Public. Returns the providers flagged "offer at self-signup" as
-  `[{ id, label }]` (no secrets) so the signup screen knows which "Continue
-  with …" buttons to render. Empty list → signup stays local-only.
-- `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` — round out the
-  lifecycle.
-- Signup/verify/forgot-password move here too
-  (`POST /api/v1/auth/signup`, `/confirm`, `/forgot`, `/reset`), so the SPA
-  never speaks a Cognito verb anywhere.
+  → `200 { "method": "redirect", "location": "/api/v1/auth/federation/start" }`
+    — same-origin; the SPA does `window.location = location` (real `302`
+    happens there, see decision below).
+- `POST /api/v1/auth/password`
+  Body: `{ "password": "..." }` (identify `session` rides its cookie).
+  Verifies via `AdminInitiateAuth`, establishes the **AS session** cookie, and
+  completes the pending `/authorize` request — responds
+  `200 { "location": "<redirect_uri>?code=…" }` for the SPA to navigate to (or,
+  for the same-origin admin panel, the AS session cookie alone suffices).
+  → `200 { "challenge": "NEW_PASSWORD_REQUIRED" | "MFA_…", … }` for challenges
+    (the backend owns challenge orchestration, not the SPA).
+- `GET /api/v1/auth/federation/start` and `/federation/callback`
+  **Self-driven federation** (Cognito is *not* the federator). `start` `302`s to
+  the **external IdP's** `/authorize` (we are the OIDC client: our `client_id`,
+  our `redirect_uri` = `/federation/callback`, `state`, PKCE — all in the signed
+  `session`, which also carries `intent`). `callback` exchanges the code with
+  the IdP, then provisions/links the user in Cognito as a directory record
+  (`AdminCreateUser` + mapping) — running the same tenant-resolution +
+  initial-role-assignment as local `post-confirmation` for a new user — and
+  finally completes the pending `/authorize` (mint code → `302` to the RP).
 
-Everything the SPA sends and receives is a plain first-party JSON shape. No
-`X-Amz-Target`, no Cognito response envelopes, no Cognito flow names.
+**Layer 3 — self-service + lifecycle.**
+
+- `GET /api/v1/auth/providers` — public; providers flagged "offer at
+  self-signup" as `[{ id, label }]` so the signup screen knows which "Continue
+  with …" buttons to render. Empty list → signup stays local-only.
+- `POST /api/v1/auth/signup`, `/confirm`, `/forgot`, `/reset` — local
+  registration/verification/password-reset (wrap Cognito's `SignUp` /
+  `ConfirmSignUp` / `ForgotPassword` / …).
+- `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout` — refresh (server-side
+  via the BFF for RPs) and sign-out (clear AS session + `RevokeToken`).
+
+Everything the SPA and the BFF exchange is a plain first-party JSON/redirect
+shape. No `X-Amz-Target`, no Cognito response envelopes, no Cognito flow names —
+the one place Cognito's own token *shape* surfaces is the `/token` response,
+consumed by the first-party BFF, not the browser.
 
 ## What changes, by layer
 
-**`node-vlinder-auth/packages/lambda-src`** — new `auth-api/` handler set
-(identify / password / callback / refresh / logout / signup / confirm /
-forgot / reset). It owns *all* Cognito interaction: `AdminInitiateAuth` /
-`RespondToAuthChallenge` / `SignUp` / `ConfirmSignUp` / `InitiateAuth`
-(refresh) / the federated code exchange. This is the single place that knows
-about Cognito. Published in the same `@vln-devsecops/auth-lambda` package.
+**`node-vlinder-auth/packages/lambda-src`** — new `auth-api/` handler set across
+the three layers: `authorize` / `token` (RP handoff), `identify` / `password` /
+`federation-start` / `federation-callback` (login UI), and `signup` / `confirm`
+/ `forgot` / `reset` / `refresh` / `logout`. It owns *all* Cognito interaction
+(`AdminInitiateAuth` / `RespondToAuthChallenge` / `SignUp` / `ConfirmSignUp` /
+`AdminCreateUser` / `RevokeToken`) **plus** the one-time-code store and the
+role of **OIDC client to each external IdP** (self-driven federation — its own
+`/authorize` redirect and code exchange, since Cognito-native federation is
+hosted-bound). This is the single place that knows about Cognito. Published in
+the same `@vln-devsecops/auth-lambda` package.
 
 Identity-provider resolution (step 2) needs a lookup: identifier →
 { local | federated-provider }. Options, cheapest first:
@@ -134,20 +209,31 @@ Identity-provider resolution (step 2) needs a lookup: identifier →
 - Default to local password when no federation is configured (the common
   single-tenant case), so this stays zero-config until someone wires an IdP.
 
+The **one-time authorization code** (Layer 1) needs a short-TTL store —
+DynamoDB with a TTL attribute, keyed by the code, holding
+`(user, redirect_uri, code_challenge, exp)`. The RP `client_id` →
+`{ allowed redirect_uris, client_secret }` registry is small config (a table or
+module variable), not a dynamic-registration system.
+
 **`node-vlinder-auth/packages/auth-site`** — rip out the direct Cognito
 calls in `main.tsx`/`authConfig.ts`. The SPA becomes: collect identifier →
 `POST /auth/identify` → branch on `method` (prompt password vs navigate to
-`location`) → on password, `POST /auth/password`. (What the *admin panel* SPA
-holds is the same-origin AS session cookie; a cross-origin consuming app instead
-receives tokens via the authorization-code redirect — see the token-delivery
-correction.) `authConfig.ts`'s `buildInitiateAuthBody` /
-`parseAuthResult` (Cognito-shaped) are deleted. `ui-auth` components stay
-mostly as-is (they already emit plain `{ email, password }` callbacks); a new
-identifier-first entry component may be warranted. The **signup screen** calls
-`GET /api/v1/auth/providers` and renders a "Continue with …" button per
-returned provider above the local form (each button → top-level nav to
-`/api/v1/auth/authorize?provider=<id>&intent=signup`); with an empty list the
-buttons simply don't render and signup is local-only.
+`location`) → on password, `POST /auth/password`. The SPA never holds tokens:
+the **admin panel** rides the same-origin AS session cookie, and a **cross-origin
+consuming app** gets tokens only through its BFF (Layer 1), never in browser JS.
+`authConfig.ts`'s `buildInitiateAuthBody` / `parseAuthResult` (Cognito-shaped)
+are deleted. `ui-auth` components stay mostly as-is (they already emit plain
+`{ email, password }` callbacks); a new identifier-first entry component may be
+warranted. The **signup screen** calls `GET /api/v1/auth/providers` and renders
+a "Continue with …" button per returned provider above the local form (each →
+top-level nav to `/api/v1/auth/federation/start?provider=<id>&intent=signup`);
+empty list → signup is local-only.
+
+**The consuming app's BFF** (the app team's code, not this repo) is the fourth
+participant: it starts login by redirecting to `/authorize`, handles the
+`redirect_uri` callback, calls `/token` server-to-server, and sets its own
+httpOnly session cookie on the app's origin. Documenting that integration
+(config: `client_id`, `redirect_uri`, `client_secret`) is part of this work.
 
 **`terraform-modules/modules/aws/cognito_auth`** —
 - Add the auth Lambda + its `aws/http_api` routes under `/api/v1/auth`
@@ -157,11 +243,16 @@ buttons simply don't render and signup is local-only.
   talks to `cognito-idp.<region>` at all; it only talks to `/api/v1/auth`,
   which is just more admin-api-style HTTP API. This actually *simplifies*
   the distribution (removes the whole `X-Amz-Target` allowlist workaround).
-- The `auth_site` app client may switch from `USER_PASSWORD_AUTH` to
-  `ADMIN_USER_PASSWORD_AUTH`, since auth now runs server-side in a Lambda
-  with admin credentials rather than from the browser.
-- `config.json`: the SPA no longer needs `userPoolClientId` (the backend
-  holds it) — runtime config may shrink to just the multi-tenant flag.
+- The `auth_site` app client switches to `ADMIN_USER_PASSWORD_AUTH`, since auth
+  now runs server-side in a Lambda with admin credentials rather than from the
+  browser. **No Cognito user-pool (hosted) domain is created** — we don't use
+  the `/oauth2/*` endpoints or native federation.
+- Add the **one-time-code DynamoDB table** (TTL) and the **RP client registry**
+  (`client_id` → allowed `redirect_uri`s + `client_secret` in Secrets Manager)
+  for Layer 1, and the `identity_providers` table + provider secrets for
+  self-driven federation.
+- `config.json`: the SPA no longer needs `userPoolClientId` (the backend holds
+  it) — runtime config may shrink to just the multi-tenant flag.
 
 **e2e** — the flows are the same from the user's point of view (the whole
 point), so the Playwright scenarios largely stand. The World's Cognito
@@ -177,9 +268,13 @@ app deliberately, unaffected by how the app itself authenticates).
    federation.
 3. Once the SPA no longer calls `/api/v1/idp`, delete the IDP proxy behavior,
    its CloudFront function, and the custom origin.
-4. Add federated-IdP resolution + the redirect/callback path as a separate
-   increment, with its own e2e scenario (a stub OIDC provider, or a real
-   test realm).
+4. Add the **Layer-1 BFF handoff** (`/authorize` + `/token` + one-time-code
+   table + RP client registry) and move the **admin API authorizer to read the
+   AS session cookie**; prove it with a stub BFF RP in the e2e suite.
+5. Add **self-driven federation** (`/federation/start` + `/federation/callback`,
+   auth Lambda as OIDC client, Cognito-as-directory linking) as its own
+   increment, with an e2e scenario against a stub OIDC provider (or a real test
+   realm).
 
 ## Open questions to settle before building
 
@@ -188,10 +283,10 @@ app deliberately, unaffected by how the app itself authenticates).
   handling a redirect inside the React app is brittle and finicky. Reconciled
   with the "can't read a cross-origin redirect out of `fetch`" concern by
   never `fetch`-ing the redirect: `identify` returns a **same-origin**
-  `location` (`/api/v1/auth/authorize`), the SPA does a top-level
+  `location` (`/api/v1/auth/federation/start`), the SPA does a top-level
   `window.location =` navigation to it, and *that* endpoint emits the real
-  `302` to the provider, which the browser follows natively. React never has to
-  catch or replay a cross-origin redirect.
+  `302` to the external IdP, which the browser follows natively. React never has
+  to catch or replay a cross-origin redirect.
 - **Settled: session is a signed (JWS) self-contained token.** Decision (rlc):
   the `session` passed between `identify` → `password`/`authorize` is a signed
   **JWS** carrying the whole intermediate session state (resolved identifier,
@@ -237,8 +332,8 @@ app deliberately, unaffected by how the app itself authenticates).
   write surface to secure (hence the dedicated `federation:*` privilege and
   write-only secret handling) — acceptable, and consistent with roles/users
   already being runtime-managed here.
-- **Token delivery/storage — trade-offs (decision pending).** The realistic
-  browser threat is XSS, and that's what splits the two options:
+- **Settled: token delivery is the BFF path.** The realistic browser threat is
+  XSS, and that's what splits the storage options:
   - **`sessionStorage` (today's baseline).** Simple: the SPA reads the token
     and sets `Authorization: Bearer` itself, which is exactly what the admin
     API's API-Gateway JWT authorizer already expects. No CSRF exposure (nothing
@@ -285,20 +380,31 @@ app deliberately, unaffected by how the app itself authenticates).
   general RP's API lives at its own origin and validates the delivered token
   itself.
 
-  **Open decision — RP integration model** (drives the token-delivery contract;
-  see the question raised alongside this doc). Options: a full multi-client OIDC
-  provider; a single first-party companion app behind a BFF; or a
-  token-in-redirect handoff. Pinning this **reopens the `/password` and
-  `/callback` contract shapes above**, which were drafted under the (wrong)
-  same-origin-cookie assumption and are flagged accordingly.
-- **Acknowledged: the admin API authorizer must move with the IdP** (decision:
-  rlc — keep in view). Even behind a vendor-neutral front door the admin API
-  authorizes against Cognito-issued JWTs today; if the IdP is later swapped,
-  the authorizer's issuer/JWKS must move too, or we've vendor-neutralized the
-  front door while leaving Cognito hard-wired at the back. This is the same
-  authorizer touched by the token-storage decision above (cookie sessions need
-  the authorizer to read a cookie, not a Bearer header), so both changes land
-  together in the federation increment — noted, not blocking the first
+  **Decision (rlc): the BFF path** (see "Platform decision" above and the
+  Layer-1 contract). Tokens reach the different-origin consuming app via our
+  slim `/authorize` + `/token` handoff (one-time code + PKCE, `redirect_uri`
+  allowlist); the app's **BFF** holds them server-side and sets its *own*
+  httpOnly cookie on the app's origin, so **no token touches browser JS on
+  either origin** — the full XSS win, cross-origin. `auth.<zone>` keeps httpOnly
+  cookies only for genuinely same-origin material (the identify JWS and the AS
+  **session** cookie for SSO), never the RP's tokens.
+  - *Requires* the consuming app to have a server-side component (a pure static
+    SPA with no backend would need token-in-redirect / a public PKCE client
+    instead — not our case).
+  - Handles N *known* first-party apps via the `redirect_uri` allowlist, with
+    SSO across them for free; it deliberately does **not** support arbitrary
+    third-party clients (that would be the full-OIDC-provider build we rejected).
+  - The **admin panel** is the one same-origin consumer and skips the BFF: it
+    rides the AS session cookie directly (its API authorizer reads that cookie —
+    see next item).
+- **Admin API authorizer: reads the AS session cookie (settled); its issuer
+  moving with the IdP stays acknowledged.** The admin panel is the same-origin
+  consumer, so its API swaps the API-Gateway JWT authorizer for a **Lambda
+  authorizer that validates the AS session cookie** — landing in the Layer-1
+  increment (step 4). Separately, that validation still resolves against
+  Cognito-issued tokens today; if the engine is later swapped, the issuer/JWKS
+  it trusts must move too — kept in view so we don't vendor-neutralize the front
+  door while leaving Cognito hard-wired at the back. Neither blocks the first
   password-flow increment.
 - **Account linking / collision policy (federated signup).** When a federated
   signup returns an email that already has a *local* account (or a different
