@@ -86,20 +86,25 @@ get a token in the first place). Illustrative, to be firmed up:
   existing account or provision a new one. Because this is a top-level browser
   navigation to a same-origin endpoint, the browser follows the cross-origin
   `302` natively — no `fetch`, no React redirect handling.
-- `POST /api/v1/auth/password`
-  Body: `{ "password": "..." }` (the identify `session` rides its cookie)
-  → `200 {}` with the `access`/`id`/`refresh` tokens set as `HttpOnly` cookies
-    (see token-storage decision) — no tokens in the body.
+- `POST /api/v1/auth/password` *(response shape pending the RP-model decision —
+  see the token-delivery correction below)*
+  Body: `{ "password": "..." }` (the identify `session` rides its cookie).
+  Establishes the **AS session** (httpOnly cookie on `auth.<zone>`). How the
+  resulting tokens reach the consuming app depends on the RP model: for a
+  cross-origin RP the flow continues an authorization-code redirect to the RP;
+  only a same-origin consumer (the admin panel) can rely on the AS session
+  cookie directly.
   → `200 { "challenge": "NEW_PASSWORD_REQUIRED", ... }` for MFA/new-password
     challenges (the backend owns challenge orchestration, not the SPA).
-- `POST /api/v1/auth/callback` (or a GET redirect target)
+- `POST /api/v1/auth/callback` (or a GET redirect target) *(token-delivery
+  pending the RP-model decision)*
   Completes a federated login **or signup**: exchanges the provider's code for
   tokens. If the identity is new (and `intent=signup`, or JIT provisioning is
   enabled for a domain-mapped realm), it provisions the user first — the same
   tenant-resolution + initial-role-assignment the local `post-confirmation`
-  trigger performs — then signs them in by setting the same `HttpOnly` token
-  cookies. If the identity already exists it just signs them in. (As a redirect
-  target it ends by 302-ing back to the SPA, cookies set.)
+  trigger performs — then establishes the AS session and hands the app its
+  tokens per the chosen RP model (cross-origin auth-code redirect for a general
+  RP). If the identity already exists it just signs them in.
 - `GET /api/v1/auth/providers`
   Public. Returns the providers flagged "offer at self-signup" as
   `[{ id, label }]` (no secrets) so the signup screen knows which "Continue
@@ -132,10 +137,10 @@ Identity-provider resolution (step 2) needs a lookup: identifier →
 **`node-vlinder-auth/packages/auth-site`** — rip out the direct Cognito
 calls in `main.tsx`/`authConfig.ts`. The SPA becomes: collect identifier →
 `POST /auth/identify` → branch on `method` (prompt password vs navigate to
-`location`) → on password, `POST /auth/password`. The SPA no longer stores
-tokens at all — they arrive as `HttpOnly` cookies and ride subsequent requests
-automatically (see token-storage decision). `authConfig.ts`'s
-`buildInitiateAuthBody` /
+`location`) → on password, `POST /auth/password`. (What the *admin panel* SPA
+holds is the same-origin AS session cookie; a cross-origin consuming app instead
+receives tokens via the authorization-code redirect — see the token-delivery
+correction.) `authConfig.ts`'s `buildInitiateAuthBody` /
 `parseAuthResult` (Cognito-shaped) are deleted. `ui-auth` components stay
 mostly as-is (they already emit plain `{ email, password }` callbacks); a new
 identifier-first entry component may be warranted. The **signup screen** calls
@@ -254,23 +259,38 @@ app deliberately, unaffected by how the app itself authenticates).
     (2) a JWT in a cookie must stay under the ~4 KB limit (watch a large
     `permissions` claim).
 
-  **Settled (rlc): httpOnly cookies.** The post-login auth tokens
-  (`access`/`id`/`refresh`) are delivered as `HttpOnly` + `SameSite=Strict` +
-  `Secure` cookies set by the auth Lambda — a clear XSS win on an already
-  same-origin design. Consequence: the **SPA stops handling tokens in JS
-  entirely** — no `sessionStorage`, no `Authorization`-header plumbing; the
-  cookie rides same-origin requests automatically. Add a double-submit CSRF
-  token on state-changing routes as belt-and-suspenders. This is coupled to the
-  authorizer change (next item — the admin API authorizer must read the cookie,
-  not a Bearer header), so the two land together; `sessionStorage` stays the
-  baseline only until that pair ships.
+  **Correction (rlc): the final auth tokens cannot be an auth-origin cookie.**
+  The "one first-party same-origin surface" premise above holds only for the
+  bundled admin panel. The auth component's actual job is to authenticate a user
+  *for a consuming application at a **different** origin*, and a cookie scoped to
+  `auth.<zone>` is exactly what `SameSite` + domain-scoping stop from ever
+  reaching `app.<other-origin>`. So the post-login `access`/`id`/`refresh`
+  tokens must be **delivered to the relying-party app cross-origin**, not set as
+  an auth-origin cookie. The standard mechanism is an OAuth2/OIDC
+  **authorization-code redirect (with PKCE)** back to the app's `redirect_uri`;
+  the app receives the tokens and owns its own storage (ideally an httpOnly
+  cookie on *its* origin via a BFF — but that is the RP's concern, not ours).
 
-  Note — this decision is about the **post-login auth tokens**, distinct from
-  the in-flight identify `session` JWS (settled above). For consistency the
-  identify JWS is delivered the same way — a short-lived `HttpOnly` cookie set
-  between `identify` and `password`/`authorize` rather than round-tripped
-  through the SPA body — so **no token material of either kind ever touches
-  JS**. (It stays a signed JWS regardless; httpOnly is just the transport.)
+  What `auth.<zone>` legitimately *does* keep as httpOnly cookies (genuinely
+  same-origin, never crossing to the RP):
+  - the in-flight **identify JWS** (settled above), and
+  - an **AS session cookie** — "this browser is authenticated at the auth
+    component" — enabling SSO / silent re-auth so the user isn't re-prompted per
+    app. This is emphatically *not* the RP's access/refresh token.
+
+  This reframes the component as an **authorization server with its own branded
+  login UI**, not a same-origin token vendor — and it revises the
+  admin-API-authorizer coupling below: the admin panel is simply the one RP that
+  happens to be same-origin (so it can ride the AS session cookie), whereas a
+  general RP's API lives at its own origin and validates the delivered token
+  itself.
+
+  **Open decision — RP integration model** (drives the token-delivery contract;
+  see the question raised alongside this doc). Options: a full multi-client OIDC
+  provider; a single first-party companion app behind a BFF; or a
+  token-in-redirect handoff. Pinning this **reopens the `/password` and
+  `/callback` contract shapes above**, which were drafted under the (wrong)
+  same-origin-cookie assumption and are flagged accordingly.
 - **Acknowledged: the admin API authorizer must move with the IdP** (decision:
   rlc — keep in view). Even behind a vendor-neutral front door the admin API
   authorizes against Cognito-issued JWTs today; if the IdP is later swapped,
