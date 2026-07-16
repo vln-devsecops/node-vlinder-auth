@@ -68,15 +68,18 @@ get a token in the first place). Illustrative, to be firmed up:
 
 - `POST /api/v1/auth/identify`
   Body: `{ "identifier": "jane@example.com" }`
-  → `200 { "method": "password", "session": "<opaque>" }` — prompt for password.
-  → `200 { "method": "redirect", "location": "/api/v1/auth/authorize?session=<opaque>" }`
+  The identify `session` JWS is returned as a short-lived `HttpOnly` cookie
+  (`Set-Cookie`), not in the body — see the token-storage decision below.
+  → `200 { "method": "password" }` — prompt for password.
+  → `200 { "method": "redirect", "location": "/api/v1/auth/authorize" }`
     — the `location` is **same-origin**; the frontend does
     `window.location = location`.
-- `GET /api/v1/auth/authorize?session=<opaque>` **or**
+- `GET /api/v1/auth/authorize` (reads the identify `session` cookie) **or**
   `?provider=<id>&intent=signup`
   The genuine redirect. Either resolves the federated provider from the
-  identify `session` (login/domain-mapped case) or takes a directly-chosen
-  `provider` with `intent=signup` (the signup-screen button case). Answers
+  identify `session` cookie (login/domain-mapped case) or takes a
+  directly-chosen `provider` with `intent=signup` (the signup-screen button
+  case). Answers
   **`302`** with `Location:` set to the provider's `/authorize?...` (client_id,
   redirect_uri back to our callback, state, PKCE). The `intent` is carried in
   the signed `state`/session so the callback knows whether to require an
@@ -84,8 +87,9 @@ get a token in the first place). Illustrative, to be firmed up:
   navigation to a same-origin endpoint, the browser follows the cross-origin
   `302` natively — no `fetch`, no React redirect handling.
 - `POST /api/v1/auth/password`
-  Body: `{ "session": "<opaque>", "password": "..." }`
-  → `200 { "tokens": { accessToken, idToken, refreshToken, expiresAt } }`
+  Body: `{ "password": "..." }` (the identify `session` rides its cookie)
+  → `200 {}` with the `access`/`id`/`refresh` tokens set as `HttpOnly` cookies
+    (see token-storage decision) — no tokens in the body.
   → `200 { "challenge": "NEW_PASSWORD_REQUIRED", ... }` for MFA/new-password
     challenges (the backend owns challenge orchestration, not the SPA).
 - `POST /api/v1/auth/callback` (or a GET redirect target)
@@ -93,8 +97,9 @@ get a token in the first place). Illustrative, to be firmed up:
   tokens. If the identity is new (and `intent=signup`, or JIT provisioning is
   enabled for a domain-mapped realm), it provisions the user first — the same
   tenant-resolution + initial-role-assignment the local `post-confirmation`
-  trigger performs — then returns tokens in the same vendor-neutral `tokens`
-  shape. If the identity already exists it just signs them in.
+  trigger performs — then signs them in by setting the same `HttpOnly` token
+  cookies. If the identity already exists it just signs them in. (As a redirect
+  target it ends by 302-ing back to the SPA, cookies set.)
 - `GET /api/v1/auth/providers`
   Public. Returns the providers flagged "offer at self-signup" as
   `[{ id, label }]` (no secrets) so the signup screen knows which "Continue
@@ -127,8 +132,10 @@ Identity-provider resolution (step 2) needs a lookup: identifier →
 **`node-vlinder-auth/packages/auth-site`** — rip out the direct Cognito
 calls in `main.tsx`/`authConfig.ts`. The SPA becomes: collect identifier →
 `POST /auth/identify` → branch on `method` (prompt password vs navigate to
-`location`) → on password, `POST /auth/password` → store the returned
-vendor-neutral tokens. `authConfig.ts`'s `buildInitiateAuthBody` /
+`location`) → on password, `POST /auth/password`. The SPA no longer stores
+tokens at all — they arrive as `HttpOnly` cookies and ride subsequent requests
+automatically (see token-storage decision). `authConfig.ts`'s
+`buildInitiateAuthBody` /
 `parseAuthResult` (Cognito-shaped) are deleted. `ui-auth` components stay
 mostly as-is (they already emit plain `{ email, password }` callbacks); a new
 identifier-first entry component may be warranted. The **signup screen** calls
@@ -190,7 +197,10 @@ app deliberately, unaffected by how the app itself authenticates).
   — put no secrets in it (the identifier is the user's own; that's fine), and
   keep the TTL short since it's an in-flight auth token. Signing key lives with
   the auth Lambda (KMS asymmetric key, or a Secrets Manager HS256 secret);
-  KMS-asymmetric keeps the private key out of the function entirely.
+  KMS-asymmetric keeps the private key out of the function entirely. Transport:
+  it's delivered as a short-lived `HttpOnly` cookie between the two steps, not
+  in the response body (see token-storage decision), so it never touches JS
+  either — httpOnly is just the transport; it remains a signed JWS.
 - **Settled: federation is configured in the admin panel** (decision: rlc).
   Rather than a Terraform variable (redeploy per change, GitOps-declared), the
   domain→provider mapping is managed at runtime by admins, gated behind a new
@@ -244,11 +254,23 @@ app deliberately, unaffected by how the app itself authenticates).
     (2) a JWT in a cookie must stay under the ~4 KB limit (watch a large
     `permissions` claim).
 
-  **Recommendation:** move to `HttpOnly` + `SameSite=Strict` + `Secure`
-  cookies as part of the auth-Lambda work — it's a clear XSS win on an
-  already-same-origin design — but land it together with the authorizer change
-  (next item), and keep `sessionStorage` as the baseline until that pair ships.
-  **Confirm the direction.**
+  **Settled (rlc): httpOnly cookies.** The post-login auth tokens
+  (`access`/`id`/`refresh`) are delivered as `HttpOnly` + `SameSite=Strict` +
+  `Secure` cookies set by the auth Lambda — a clear XSS win on an already
+  same-origin design. Consequence: the **SPA stops handling tokens in JS
+  entirely** — no `sessionStorage`, no `Authorization`-header plumbing; the
+  cookie rides same-origin requests automatically. Add a double-submit CSRF
+  token on state-changing routes as belt-and-suspenders. This is coupled to the
+  authorizer change (next item — the admin API authorizer must read the cookie,
+  not a Bearer header), so the two land together; `sessionStorage` stays the
+  baseline only until that pair ships.
+
+  Note — this decision is about the **post-login auth tokens**, distinct from
+  the in-flight identify `session` JWS (settled above). For consistency the
+  identify JWS is delivered the same way — a short-lived `HttpOnly` cookie set
+  between `identify` and `password`/`authorize` rather than round-tripped
+  through the SPA body — so **no token material of either kind ever touches
+  JS**. (It stays a signed JWS regardless; httpOnly is just the transport.)
 - **Acknowledged: the admin API authorizer must move with the IdP** (decision:
   rlc — keep in view). Even behind a vendor-neutral front door the admin API
   authorizes against Cognito-issued JWTs today; if the IdP is later swapped,
