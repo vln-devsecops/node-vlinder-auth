@@ -419,7 +419,12 @@ app deliberately, unaffected by how the app itself authenticates).
   account** (complete its own login) before linking, which defends against a
   misbehaving IdP asserting a verified email it shouldn't — worth it if the
   existing account can hold elevated privileges.
-- **JIT provisioning default for domain-mapped realms.** For an enterprise
-  realm, does a first-time federated *login* auto-provision the user (JIT), or
-  must they have been pre-created/invited? JIT is the low-friction default and
-  matches "log in and sign up converge"; an invite-only mode is a later opt-in.
+- **Settled: JIT provisioning on; JIT users are guests until granted more**
+  (decision: rlc). A first-time federated login auto-provisions the user (no
+  pre-create/invite required). The initial role assignment is a **guest**
+  (least-privilege baseline) role — for now the *only* thing a JIT-provisioned
+  user gets until an admin explicitly assigns other roles. This keeps
+  auto-onboarding zero-friction while ensuring an auto-created identity can never
+  arrive with meaningful access; elevation is always a deliberate admin action.
+  (Invite-only / pre-provision-only remains a possible later per-provider opt-in,
+  not built now.)
