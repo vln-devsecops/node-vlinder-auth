@@ -406,15 +406,19 @@ app deliberately, unaffected by how the app itself authenticates).
   it trusts must move too — kept in view so we don't vendor-neutralize the front
   door while leaving Cognito hard-wired at the back. Neither blocks the first
   password-flow increment.
-- **Account linking / collision policy (federated signup).** When a federated
-  signup returns an email that already has a *local* account (or a different
-  provider's account) — e.g. someone signed up locally as `jane@x.com` then
-  later "Continue with Google" as the same address — what happens: link to the
-  existing account (convenient, but linking on unverified email is an account-
-  takeover vector), reject with "account exists, sign in instead," or keep them
-  separate. Safe default: **only auto-link when the provider asserts a verified
-  email matching an existing verified account; otherwise reject and route to
-  sign-in.** Confirm before building the callback provisioning.
+- **Settled: account linking / collision policy (federated signup).** When a
+  federated login returns an email that already has a *local* account (or a
+  different provider's account) — e.g. someone signed up locally as `jane@x.com`
+  then later "Continue with Google" as the same address — link **only when the
+  provider asserts a verified email matching an existing verified account, and
+  the user explicitly confirms the link** (decision: rlc). No verified match →
+  reject and route to sign-in; never silently merge. The confirmation is an
+  interstitial ("An account for `jane@x.com` already exists — link your Google
+  sign-in to it?") shown before the identities are joined. Hardening option to
+  weigh at build time: also require the user to **prove control of the existing
+  account** (complete its own login) before linking, which defends against a
+  misbehaving IdP asserting a verified email it shouldn't — worth it if the
+  existing account can hold elevated privileges.
 - **JIT provisioning default for domain-mapped realms.** For an enterprise
   realm, does a first-time federated *login* auto-provision the user (JIT), or
   must they have been pre-created/invited? JIT is the low-friction default and
