@@ -4,16 +4,45 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { QueryCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { resolveAccessScope, ForbiddenError, type CallerContext } from '../authz'
+import type { AssignedRole, RoleActivation } from '../../shared/types'
 
 const PRIVILEGE_FAMILY = 'admin:users:read'
 
 export interface AdminUserSummary {
   userId: string
   tenantId: string
-  roleId: string
+  roles: AssignedRole[]
   email?: string
   enabled?: boolean
   userStatus?: string
+}
+
+interface AssignmentRow {
+  userId: string
+  tenantId: string
+  roleId: string
+  activation?: RoleActivation
+}
+
+interface GroupedUser {
+  userId: string
+  tenantId: string
+  roles: AssignedRole[]
+}
+
+/** Collapses per-role assignment rows into one entry per user, gathering roles. */
+function groupByUser(rows: AssignmentRow[]): GroupedUser[] {
+  const byUser = new Map<string, GroupedUser>()
+  for (const row of rows) {
+    const role: AssignedRole = { roleId: row.roleId, activation: row.activation ?? 'default' }
+    const existing = byUser.get(row.userId)
+    if (existing) {
+      existing.roles.push(role)
+    } else {
+      byUser.set(row.userId, { userId: row.userId, tenantId: row.tenantId, roles: [role] })
+    }
+  }
+  return [...byUser.values()]
 }
 
 export interface ListUsersParams {
@@ -51,7 +80,7 @@ export async function listUsers(params: ListUsersParams): Promise<ListUsersResul
       : await queryTenantAssignments(ddbDocClient, roleAssignmentsTableName, caller.tenantId!)
 
   const users = await Promise.all(
-    assignments.map((assignment) => hydrateUser(assignment, cognitoClient, userPoolId)),
+    groupByUser(assignments).map((user) => hydrateUser(user, cognitoClient, userPoolId)),
   )
 
   return { users: users.filter((user): user is AdminUserSummary => user !== null) }
@@ -61,7 +90,7 @@ async function queryTenantAssignments(
   ddbDocClient: DynamoDBDocumentClient,
   tableName: string,
   tenantId: string,
-): Promise<Array<{ userId: string; tenantId: string; roleId: string }>> {
+): Promise<AssignmentRow[]> {
   const result = await ddbDocClient.send(
     new QueryCommand({
       TableName: tableName,
@@ -70,26 +99,26 @@ async function queryTenantAssignments(
       ExpressionAttributeValues: { ':t': tenantId },
     }),
   )
-  return (result.Items ?? []) as Array<{ userId: string; tenantId: string; roleId: string }>
+  return (result.Items ?? []) as AssignmentRow[]
 }
 
 async function scanAllAssignments(
   ddbDocClient: DynamoDBDocumentClient,
   tableName: string,
-): Promise<Array<{ userId: string; tenantId: string; roleId: string }>> {
+): Promise<AssignmentRow[]> {
   const result = await ddbDocClient.send(new ScanCommand({ TableName: tableName }))
-  return (result.Items ?? []) as Array<{ userId: string; tenantId: string; roleId: string }>
+  return (result.Items ?? []) as AssignmentRow[]
 }
 
 async function hydrateUser(
-  assignment: { userId: string; tenantId: string; roleId: string },
+  user: GroupedUser,
   cognitoClient: CognitoIdentityProviderClient,
   userPoolId: string,
 ): Promise<AdminUserSummary | null> {
   let cognitoUser
   try {
     cognitoUser = await cognitoClient.send(
-      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: assignment.userId }),
+      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: user.userId }),
     )
   } catch (error) {
     // A role assignment can outlive its Cognito user (deleted via the
@@ -105,9 +134,9 @@ async function hydrateUser(
   const email = cognitoUser.UserAttributes?.find((attr) => attr.Name === 'email')?.Value
 
   return {
-    userId: assignment.userId,
-    tenantId: assignment.tenantId,
-    roleId: assignment.roleId,
+    userId: user.userId,
+    tenantId: user.tenantId,
+    roles: user.roles,
     email,
     enabled: cognitoUser.Enabled,
     userStatus: cognitoUser.UserStatus,

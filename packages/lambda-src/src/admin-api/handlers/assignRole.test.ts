@@ -17,7 +17,7 @@ const commonParams = {
 }
 
 describe('assignRole', () => {
-  it('overwrites the role for a user in the caller\'s own tenant', async () => {
+  it('adds a role (composite key) for a user in the caller\'s own tenant', async () => {
     ddbMock
       .on(QueryCommand)
       .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }] })
@@ -33,9 +33,37 @@ describe('assignRole', () => {
     const putCall = ddbMock.commandCalls(PutCommand)[0]
     expect(putCall.args[0].input).toMatchObject({
       TableName: 'role-assignments-table',
-      Item: { userId: 'user-1', tenantId: 'acme-corp', roleId: 'tenant-admin' },
+      Item: {
+        userId: 'user-1',
+        tenantRole: 'acme-corp#tenant-admin',
+        tenantId: 'acme-corp',
+        roleId: 'tenant-admin',
+        // A newly-granted role defaults to elevated (held for sudo).
+        activation: 'elevated',
+      },
     })
+    // Idempotent add, not a conditional create.
     expect(putCall.args[0].input.ConditionExpression).toBeUndefined()
+  })
+
+  it('writes activation=default when the role is granted as a login role', async () => {
+    ddbMock
+      .on(QueryCommand)
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }] })
+    ddbMock.on(PutCommand).resolves({})
+
+    await assignRole({
+      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      targetUserId: 'user-1',
+      roleId: 'tenant-admin',
+      activation: 'default',
+      ...commonParams,
+    })
+
+    expect(ddbMock.commandCalls(PutCommand)[0].args[0].input.Item).toMatchObject({
+      roleId: 'tenant-admin',
+      activation: 'default',
+    })
   })
 
   it('rejects an "own"-scoped caller acting on a different tenant\'s user', async () => {

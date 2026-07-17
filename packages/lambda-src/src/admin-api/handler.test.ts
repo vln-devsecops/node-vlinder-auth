@@ -115,32 +115,54 @@ describe('admin-api handler', () => {
     expect(result.statusCode).toBe(200)
   })
 
-  it('routes PUT /users/{userId}/role to assignRole with the parsed body', async () => {
+  it('routes PUT /users/{userId}/roles/{roleId} to assignRole, defaulting activation to elevated', async () => {
     assignRoleMock.mockResolvedValue(undefined)
 
     const result = await handler(
       buildEvent({
-        routeKey: 'PUT /users/{userId}/role',
-        pathParameters: { userId: 'user-1' },
-        body: JSON.stringify({ roleId: 'tenant-admin' }),
+        routeKey: 'PUT /users/{userId}/roles/{roleId}',
+        pathParameters: { userId: 'user-1', roleId: 'tenant-admin' },
       }),
     )
 
     expect(assignRoleMock).toHaveBeenCalledWith(
-      expect.objectContaining({ targetUserId: 'user-1', roleId: 'tenant-admin' }),
+      expect.objectContaining({
+        targetUserId: 'user-1',
+        roleId: 'tenant-admin',
+        activation: 'elevated',
+      }),
     )
     expect(result.statusCode).toBe(204)
   })
 
-  it('routes DELETE /users/{userId}/role to revokeRole', async () => {
+  it('passes activation=default from the body when the role is granted as a login role', async () => {
+    assignRoleMock.mockResolvedValue(undefined)
+
+    await handler(
+      buildEvent({
+        routeKey: 'PUT /users/{userId}/roles/{roleId}',
+        pathParameters: { userId: 'user-1', roleId: 'tenant-admin' },
+        body: JSON.stringify({ activation: 'default' }),
+      }),
+    )
+
+    expect(assignRoleMock).toHaveBeenCalledWith(
+      expect.objectContaining({ activation: 'default' }),
+    )
+  })
+
+  it('routes DELETE /users/{userId}/roles/{roleId} to revokeRole with the path params', async () => {
     revokeRoleMock.mockResolvedValue(undefined)
 
     const result = await handler(
-      buildEvent({ routeKey: 'DELETE /users/{userId}/role', pathParameters: { userId: 'user-1' } }),
+      buildEvent({
+        routeKey: 'DELETE /users/{userId}/roles/{roleId}',
+        pathParameters: { userId: 'user-1', roleId: 'billing' },
+      }),
     )
 
     expect(revokeRoleMock).toHaveBeenCalledWith(
-      expect.objectContaining({ targetUserId: 'user-1' }),
+      expect.objectContaining({ targetUserId: 'user-1', roleId: 'billing' }),
     )
     expect(result.statusCode).toBe(204)
   })

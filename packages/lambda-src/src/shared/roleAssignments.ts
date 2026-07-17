@@ -1,5 +1,14 @@
 import { PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 
+/**
+ * The assignments table's composite range key. A user may hold several roles
+ * per tenant, so the row is keyed by `${tenantId}#${roleId}` (one row per
+ * grant) rather than by tenantId alone.
+ */
+export function tenantRoleKey(tenantId: string, roleId: string): string {
+  return `${tenantId}#${roleId}`
+}
+
 export interface CreateInitialRoleAssignmentParams {
   userId: string
   tenantId: string
@@ -9,9 +18,11 @@ export interface CreateInitialRoleAssignmentParams {
 }
 
 /**
- * Writes the first role assignment for a newly-confirmed user. Uses a
+ * Writes the seed role assignment for a newly-confirmed user. Uses a
  * conditional write so a retried trigger invocation (Cognito may redeliver)
- * never clobbers a role an admin has since changed.
+ * never duplicates the seeded grant. The condition guards the exact
+ * (user, tenant, role) row, so it is idempotent for the seed role itself;
+ * other roles an admin later adds are untouched.
  */
 export async function createInitialRoleAssignment(
   params: CreateInitialRoleAssignmentParams,
@@ -22,7 +33,14 @@ export async function createInitialRoleAssignment(
     await ddbDocClient.send(
       new PutCommand({
         TableName: tableName,
-        Item: { userId, tenantId, roleId },
+        // The seed role is a default (login) role -- it is "what you log in as".
+        Item: {
+          userId,
+          tenantRole: tenantRoleKey(tenantId, roleId),
+          tenantId,
+          roleId,
+          activation: 'default',
+        },
         ConditionExpression: 'attribute_not_exists(userId)',
       }),
     )

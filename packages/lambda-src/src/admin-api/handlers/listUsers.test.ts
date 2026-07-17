@@ -48,12 +48,43 @@ describe('listUsers', () => {
       {
         userId: 'user-1',
         tenantId: 'acme-corp',
-        roleId: 'member',
+        roles: [{ roleId: 'member', activation: 'default' }],
         email: 'user1@acme.com',
         enabled: true,
         userStatus: 'CONFIRMED',
       },
     ])
+  })
+
+  it('collapses a user\'s multiple role rows into one entry with all roles', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member', activation: 'default' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing', activation: 'elevated' },
+      ],
+    })
+    cognitoMock.on(AdminGetUserCommand).resolves({
+      Username: 'user-1',
+      Enabled: true,
+      UserStatus: 'CONFIRMED',
+      UserAttributes: [{ Name: 'email', Value: 'user1@acme.com' }],
+    })
+
+    const result = await listUsers({
+      caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:own'] },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    })
+
+    expect(result.users).toHaveLength(1)
+    expect(result.users[0].roles).toEqual([
+      { roleId: 'member', activation: 'default' },
+      { roleId: 'billing', activation: 'elevated' },
+    ])
+    // Cognito hydrated once per user, not once per role row.
+    expect(cognitoMock.commandCalls(AdminGetUserCommand)).toHaveLength(1)
   })
 
   it('skips role assignments whose Cognito user no longer exists', async () => {

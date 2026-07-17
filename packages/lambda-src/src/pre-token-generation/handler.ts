@@ -52,7 +52,7 @@ export async function handler(
 
   await invokeOptionalHook(config.hookModulePath, event, {
     tenantId: resolved.tenantId,
-    roleId: resolved.roleId,
+    roleIds: resolved.roleIds,
     privileges: resolved.privileges,
   })
 

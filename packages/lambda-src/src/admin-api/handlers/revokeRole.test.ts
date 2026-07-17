@@ -17,22 +17,46 @@ const commonParams = {
 }
 
 describe('revokeRole', () => {
-  it('deletes the role assignment for a user in the caller\'s own tenant', async () => {
+  it('deletes only the named role, keying by the (tenant, role) composite', async () => {
     ddbMock
       .on(QueryCommand)
-      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'tenant-admin' }] })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing' }] })
     ddbMock.on(DeleteCommand).resolves({})
 
     await revokeRole({
       caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
       targetUserId: 'user-1',
+      roleId: 'billing',
       ...commonParams,
     })
 
     const deleteCall = ddbMock.commandCalls(DeleteCommand)[0]
     expect(deleteCall.args[0].input).toMatchObject({
       TableName: 'role-assignments-table',
-      Key: { userId: 'user-1', tenantId: 'acme-corp' },
+      Key: { userId: 'user-1', tenantRole: 'acme-corp#billing' },
+    })
+  })
+
+  it('leaves the user\'s other roles untouched (deletes exactly one row)', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'reader' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing' },
+      ],
+    })
+    ddbMock.on(DeleteCommand).resolves({})
+
+    await revokeRole({
+      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      targetUserId: 'user-1',
+      roleId: 'reader',
+      ...commonParams,
+    })
+
+    expect(ddbMock.commandCalls(DeleteCommand)).toHaveLength(1)
+    expect(ddbMock.commandCalls(DeleteCommand)[0].args[0].input.Key).toEqual({
+      userId: 'user-1',
+      tenantRole: 'acme-corp#reader',
     })
   })
 
@@ -45,6 +69,7 @@ describe('revokeRole', () => {
       revokeRole({
         caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
         targetUserId: 'user-2',
+        roleId: 'member',
         ...commonParams,
       }),
     ).rejects.toThrow(ForbiddenError)
@@ -59,6 +84,7 @@ describe('revokeRole', () => {
       revokeRole({
         caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:*'] },
         targetUserId: 'ghost-user',
+        roleId: 'member',
         ...commonParams,
       }),
     ).rejects.toThrow(NotFoundError)
