@@ -1,7 +1,15 @@
+export type RoleActivation = 'default' | 'elevated'
+
+/** A role a user holds: active at login (`default`) or held for sudo (`elevated`). */
+export interface AssignedRole {
+  roleId: string
+  activation: RoleActivation
+}
+
 export interface AdminUser {
   userId: string
   tenantId: string
-  roleId: string
+  roles: AssignedRole[]
   email?: string
   enabled?: boolean
   userStatus?: string
@@ -23,8 +31,9 @@ export interface AdminApiClient {
   getUser: (userId: string) => Promise<AdminUser>
   setUserEnabled: (userId: string, enabled: boolean) => Promise<void>
   listRoles: () => Promise<RoleDefinition[]>
-  assignRole: (userId: string, roleId: string) => Promise<void>
-  revokeRole: (userId: string) => Promise<void>
+  /** Adds/updates a role for a user. Omit activation to hold it for sudo (elevated). */
+  assignRole: (userId: string, roleId: string, activation?: RoleActivation) => Promise<void>
+  revokeRole: (userId: string, roleId: string) => Promise<void>
 }
 
 /** Thin fetch wrapper over cognito_auth's bundled admin API. No framework, no build step beyond Vite. */
@@ -60,11 +69,12 @@ export function createAdminApiClient(config: AdminApiClientConfig): AdminApiClie
         body: JSON.stringify({ enabled }),
       }),
     listRoles: async () => (await request<{ roles: RoleDefinition[] }>('/roles')).roles,
-    assignRole: (userId, roleId) =>
-      request(`/users/${userId}/role`, {
+    assignRole: (userId, roleId, activation = 'elevated') =>
+      request(`/users/${userId}/roles/${roleId}`, {
         method: 'PUT',
-        body: JSON.stringify({ roleId }),
+        body: JSON.stringify({ activation }),
       }),
-    revokeRole: (userId) => request(`/users/${userId}/role`, { method: 'DELETE' }),
+    revokeRole: (userId, roleId) =>
+      request(`/users/${userId}/roles/${roleId}`, { method: 'DELETE' }),
   }
 }

@@ -53,13 +53,18 @@ Then('the account has the default role assigned', async function (this: AuthWorl
   if (!this.testUser) {
     throw new Error('No test user set up for this scenario')
   }
-  const assignment = await pollUntil(
-    () => this.getRoleAssignment(this.testUser!.userId),
-    (result) => result !== null,
+  const assignments = await pollUntil(
+    () => this.getRoleAssignments(this.testUser!.userId),
+    (result) => result.length > 0,
   )
-  expect(assignment, 'post-confirmation trigger did not write a role assignment').not.toBeNull()
+  expect(
+    assignments.length,
+    'post-confirmation trigger did not write a role assignment',
+  ).toBeGreaterThan(0)
   // "member" is the module's default_role_id default -- if this ever legitimately
   // changes, update here alongside whatever changed the module default, don't
-  // just loosen the assertion.
-  expect(assignment?.roleId).toBe('member')
+  // just loosen the assertion. The seed role is a default (login) role.
+  const seeded = assignments.find((a) => a.roleId === 'member')
+  expect(seeded, 'the seeded default role should be "member"').toBeDefined()
+  expect(seeded?.activation).toBe('default')
 })

@@ -1,4 +1,4 @@
-import { createAdminApiClient } from './apiClient'
+import { createAdminApiClient, type AdminUser } from './apiClient'
 import { isMultiTenant } from './authConfig'
 import { loadTokens, isTokenExpired } from './session'
 import { loadConfig } from './config'
@@ -22,17 +22,30 @@ async function main(): Promise<void> {
   const tableContainer = document.getElementById('user-table')!
   const searchInput = document.getElementById('search') as HTMLInputElement
 
-  const [users, roles] = await Promise.all([apiClient.listUsers(), apiClient.listRoles()])
+  const roles = await apiClient.listRoles()
+  let users = await apiClient.listUsers()
 
-  const rerender = (visibleUsers: typeof users): void => {
+  // Role add/remove changes what a row shows, so re-fetch and re-render after
+  // each mutation (the panel is small; a full refresh keeps state simple).
+  const refresh = async (): Promise<void> => {
+    users = await apiClient.listUsers()
+    rerender(filterUsers(users, searchInput.value))
+  }
+
+  const rerender = (visibleUsers: AdminUser[]): void => {
     renderUserTable(tableContainer, visibleUsers, roles, {
       multiTenant,
       onToggleEnabled: async (userId, enabled) => {
         await apiClient.setUserEnabled(userId, enabled)
-        rerender(filterUsers(users, searchInput.value))
+        await refresh()
       },
-      onChangeRole: async (userId, roleId) => {
-        await apiClient.assignRole(userId, roleId)
+      onAddRole: async (userId, roleId, activation) => {
+        await apiClient.assignRole(userId, roleId, activation)
+        await refresh()
+      },
+      onRemoveRole: async (userId, roleId) => {
+        await apiClient.revokeRole(userId, roleId)
+        await refresh()
       },
     })
   }

@@ -18,6 +18,13 @@ Feature: Admin panel
     When I disable the managed user from the admin panel
     Then the managed user is disabled in Cognito
 
-  Scenario: Changing a user's role updates their assignment
-    When I change the managed user's role to "admin"
-    Then the managed user's role assignment is "admin"
+  Scenario: Granting a user an additional role keeps their existing ones
+    When I grant the managed user the "admin" role
+    Then the managed user holds the "admin" role
+    And the managed user still holds the "member" role
+
+  Scenario: Removing a role leaves the user's other roles intact
+    When I grant the managed user the "admin" role
+    And I remove the "member" role from the managed user
+    Then the managed user no longer holds the "member" role
+    And the managed user holds the "admin" role
