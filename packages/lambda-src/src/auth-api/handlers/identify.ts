@@ -21,7 +21,11 @@ export interface IdentifyResult {
   identifySession: string
 }
 
-export function identify({ identifier, signingKey, now }: IdentifyParams): IdentifyResult {
+export async function identify({
+  identifier,
+  signingKey,
+  now,
+}: IdentifyParams): Promise<IdentifyResult> {
   const trimmed = identifier.trim()
   if (!trimmed) {
     throw new InvalidIdentifierError('An identifier is required.')
@@ -29,7 +33,7 @@ export function identify({ identifier, signingKey, now }: IdentifyParams): Ident
 
   // No federation yet -> always local password.
   const method = 'password' as const
-  const identifySession = signSession(
+  const identifySession = await signSession(
     { identifier: trimmed, method },
     signingKey,
     IDENTIFY_SESSION_TTL_SECONDS,

@@ -52,7 +52,9 @@ describe('auth-api handler', () => {
     expect(JSON.parse(res.body!)).toEqual({ method: 'password' })
     const setCookie = res.cookies!.find((c) => c.startsWith(IDENTIFY_SESSION_COOKIE))!
     expect(setCookie).toContain('HttpOnly')
-    expect(verifySession(cookieValue(setCookie), KEY)).toMatchObject({ identifier: 'jane@x.com' })
+    expect(await verifySession(cookieValue(setCookie), KEY)).toMatchObject({
+      identifier: 'jane@x.com',
+    })
   })
 
   it('POST /auth/identify 400s on an empty identifier', async () => {
@@ -62,11 +64,8 @@ describe('auth-api handler', () => {
 
   it('POST /auth/password authenticates and sets the AS session cookie', async () => {
     cognitoMock.on(AdminInitiateAuthCommand).resolves({ AuthenticationResult: { IdToken: 'i' } })
-    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${signSession(
-      { identifier: 'jane@x.com', method: 'password' },
-      KEY,
-      300,
-    )}`
+    const token = await signSession({ identifier: 'jane@x.com', method: 'password' }, KEY, 300)
+    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
 
     const res = await handler(
       event('POST /auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
@@ -74,18 +73,17 @@ describe('auth-api handler', () => {
 
     expect(res.statusCode).toBe(200)
     const setCookie = res.cookies!.find((c) => c.startsWith(AS_SESSION_COOKIE))!
-    expect(verifySession(cookieValue(setCookie), KEY)).toMatchObject({ username: 'jane@x.com' })
+    expect(await verifySession(cookieValue(setCookie), KEY)).toMatchObject({
+      username: 'jane@x.com',
+    })
   })
 
   it('POST /auth/password 401s on bad credentials without an AS cookie', async () => {
     cognitoMock
       .on(AdminInitiateAuthCommand)
       .rejects(new NotAuthorizedException({ message: 'no', $metadata: {} }))
-    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${signSession(
-      { identifier: 'jane@x.com', method: 'password' },
-      KEY,
-      300,
-    )}`
+    const token = await signSession({ identifier: 'jane@x.com', method: 'password' }, KEY, 300)
+    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
 
     const res = await handler(
       event('POST /auth/password', { body: { password: 'wrong' }, cookies: [identifyCookie] }),

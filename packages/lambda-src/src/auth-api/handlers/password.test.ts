@@ -23,7 +23,7 @@ const base = {
   signingKey: KEY,
 }
 
-function identifySessionFor(identifier: string): string {
+function identifySessionFor(identifier: string): Promise<string> {
   return signSession({ identifier, method: 'password' }, KEY, 300)
 }
 
@@ -35,14 +35,14 @@ describe('password', () => {
 
     const result = await password({
       ...base,
-      identifySession: identifySessionFor('jane@example.com'),
+      identifySession: await identifySessionFor('jane@example.com'),
       password: 'correct horse',
     })
 
     expect(result.status).toBe('authenticated')
     if (result.status !== 'authenticated') return
     expect(result.username).toBe('jane@example.com')
-    expect(verifySession(result.asSession, KEY)).toMatchObject({
+    expect(await verifySession(result.asSession, KEY)).toMatchObject({
       username: 'jane@example.com',
       typ: 'as',
     })
@@ -63,7 +63,7 @@ describe('password', () => {
 
     const result = await password({
       ...base,
-      identifySession: identifySessionFor('jane@example.com'),
+      identifySession: await identifySessionFor('jane@example.com'),
       password: 'temp',
     })
 
@@ -91,7 +91,7 @@ describe('password', () => {
       await expect(
         password({
           ...base,
-          identifySession: identifySessionFor('jane@example.com'),
+          identifySession: await identifySessionFor('jane@example.com'),
           password: 'wrong',
         }),
       ).rejects.toThrow(AuthFailedError)

@@ -36,7 +36,7 @@ export type PasswordResult =
 export async function password(params: PasswordParams): Promise<PasswordResult> {
   const { identifySession, password, cognitoClient, clientId, userPoolId, signingKey, now } = params
 
-  const claims = verifySession(identifySession, signingKey, now)
+  const claims = await verifySession(identifySession, signingKey, now)
   if (!claims || typeof claims.identifier !== 'string') {
     throw new InvalidSessionError('The identify session is missing or has expired.')
   }
@@ -69,7 +69,12 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
     }
   }
 
-  const asSession = signSession({ username, typ: 'as' }, signingKey, AS_SESSION_TTL_SECONDS, now)
+  const asSession = await signSession(
+    { username, typ: 'as' },
+    signingKey,
+    AS_SESSION_TTL_SECONDS,
+    now,
+  )
   return { status: 'authenticated', asSession, username }
 }
 

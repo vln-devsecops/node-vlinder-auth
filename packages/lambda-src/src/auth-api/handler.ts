@@ -47,7 +47,7 @@ export async function handler(
   try {
     switch (event.routeKey) {
       case 'POST /auth/identify': {
-        const result = identify({ identifier: String(body.identifier ?? ''), signingKey })
+        const result = await identify({ identifier: String(body.identifier ?? ''), signingKey })
         return json(
           200,
           { method: result.method },

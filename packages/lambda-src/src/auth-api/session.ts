@@ -1,12 +1,12 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { SignJWT, jwtVerify, type JWTPayload } from 'jose'
 
 // Signed, self-contained session tokens for the vendor-neutral auth flow.
 //
 // These carry the in-flight state between /auth/identify and /auth/password
 // (the "identify session") and, after a successful sign-in, the fact that a
 // browser is authenticated at the auth component (the "AS session"). They are
-// compact JWS (HS256): signed, not stored, so the auth Lambda stays stateless
-// and a client cannot alter the payload and keep it valid. JWS is signed, not
+// HS256 JWTs (jose): signed, not stored, so the auth Lambda stays stateless and
+// a client cannot alter the payload and keep it valid. A JWT is signed, not
 // encrypted -- the payload is readable, so it must hold no secrets; see
 // doc/vendor-neutral-auth.md. Delivery is always via an HttpOnly cookie so the
 // token never reaches browser JavaScript.
@@ -14,71 +14,47 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 export const IDENTIFY_SESSION_COOKIE = 'vln_auth_identify'
 export const AS_SESSION_COOKIE = 'vln_auth_session'
 
-function base64url(input: Buffer): string {
-  return input.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-function fromBase64url(input: string): Buffer {
-  return Buffer.from(input.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
-}
-
-const HEADER = base64url(Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })))
-
-function sign(signingInput: string, key: string): string {
-  return base64url(createHmac('sha256', key).update(signingInput).digest())
+function keyBytes(key: string): Uint8Array {
+  return new TextEncoder().encode(key)
 }
 
 /**
- * Sign a payload into a compact HS256 JWS with an expiry `ttlSeconds` from now
- * (a Unix-seconds `exp` claim). `now` is injectable for deterministic tests.
+ * Sign a payload into an HS256 JWT expiring `ttlSeconds` from now. `now`
+ * (epoch ms) is injectable for deterministic tests.
  */
-export function signSession(
-  payload: Record<string, unknown>,
+export async function signSession(
+  payload: JWTPayload,
   key: string,
   ttlSeconds: number,
   now: number = Date.now(),
-): string {
-  const exp = Math.floor(now / 1000) + ttlSeconds
-  const body = base64url(Buffer.from(JSON.stringify({ ...payload, exp })))
-  const signingInput = `${HEADER}.${body}`
-  return `${signingInput}.${sign(signingInput, key)}`
+): Promise<string> {
+  const iat = Math.floor(now / 1000)
+  return await new SignJWT(payload)
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + ttlSeconds)
+    .sign(keyBytes(key))
 }
 
 /**
- * Verify a compact HS256 JWS produced by {@link signSession}. Returns the
- * payload (including `exp`) when the signature is valid and the token has not
- * expired; returns null on any tampering, malformed token, or expiry. Signature
- * comparison is constant-time.
+ * Verify an HS256 JWT produced by {@link signSession}. Resolves to the payload
+ * when the signature is valid and the token has not expired; resolves to null
+ * on any tampering, malformed token, or expiry. `now` (epoch ms) is injectable.
  */
-export function verifySession(
+export async function verifySession(
   token: string | undefined,
   key: string,
   now: number = Date.now(),
-): Record<string, unknown> | null {
+): Promise<JWTPayload | null> {
   if (!token) {
     return null
   }
-  const parts = token.split('.')
-  if (parts.length !== 3) {
-    return null
-  }
-  const [header, body, signature] = parts
-  const expected = sign(`${header}.${body}`, key)
-  const given = Buffer.from(signature)
-  const want = Buffer.from(expected)
-  if (given.length !== want.length || !timingSafeEqual(given, want)) {
-    return null
-  }
-  let payload: Record<string, unknown>
   try {
-    payload = JSON.parse(fromBase64url(body).toString('utf8')) as Record<string, unknown>
+    const { payload } = await jwtVerify(token, keyBytes(key), { currentDate: new Date(now) })
+    return payload
   } catch {
     return null
   }
-  if (typeof payload.exp !== 'number' || payload.exp < Math.floor(now / 1000)) {
-    return null
-  }
-  return payload
 }
 
 export interface CookieOptions {
