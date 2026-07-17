@@ -21,7 +21,7 @@ export async function waitForAdminRedirect(world: AuthWorld): Promise<void> {
       .textContent()
       .catch(() => null)
     if (alertText) {
-      throw new Error(`Sign-in did not redirect; page showed: "${alertText}"`)
+      throw new Error(`Sign-in did not redirect; page showed: "${alertText}"`, { cause: err })
     }
     throw err
   }

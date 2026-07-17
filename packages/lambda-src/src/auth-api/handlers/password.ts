@@ -56,7 +56,7 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
     // A wrong password and an unknown user are deliberately collapsed into one
     // opaque failure so the endpoint doesn't disclose which accounts exist.
     if (error instanceof NotAuthorizedException || error instanceof UserNotFoundException) {
-      throw new AuthFailedError('Incorrect username or password.')
+      throw new AuthFailedError('Incorrect username or password.', { cause: error })
     }
     throw error
   }

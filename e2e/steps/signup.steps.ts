@@ -33,7 +33,9 @@ Then('I see the verify-email notice', async function (this: AuthWorld) {
       .textContent()
       .catch(() => null)
     if (alertText) {
-      throw new Error(`Sign-up did not show the verify notice; page showed: "${alertText}"`)
+      throw new Error(`Sign-up did not show the verify notice; page showed: "${alertText}"`, {
+        cause: err,
+      })
     }
     throw err
   }
