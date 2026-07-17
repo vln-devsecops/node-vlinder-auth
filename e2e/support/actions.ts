@@ -1,7 +1,10 @@
 import type { AuthWorld } from './world'
 
 export async function fillSignInForm(world: AuthWorld, email: string, password: string): Promise<void> {
-  await world.page.getByLabel('Email').fill(email)
+  // Identifier-first, two-step sign-in: identifier, then (for a local account)
+  // the password revealed by the identify step.
+  await world.page.getByLabel('Email or username').fill(email)
+  await world.page.getByRole('button', { name: 'Continue' }).click()
   await world.page.getByLabel('Password').fill(password)
   await world.page.getByRole('button', { name: 'Sign in' }).click()
 }

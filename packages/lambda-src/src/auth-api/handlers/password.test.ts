@@ -6,7 +6,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { signSession, verifySession } from '../session'
+import { signSession } from '../session'
 import { AuthFailedError, InvalidSessionError, password } from './password'
 
 const KEY = 'test-signing-key-000000000000000000000000'
@@ -28,23 +28,32 @@ function identifySessionFor(identifier: string): Promise<string> {
 }
 
 describe('password', () => {
-  it('authenticates valid credentials and establishes an AS session', async () => {
-    cognitoMock
-      .on(AdminInitiateAuthCommand)
-      .resolves({ AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r' } })
+  it('authenticates valid credentials and returns the tokens', async () => {
+    const issuedAt = 1_000_000_000_000
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: {
+        AccessToken: 'a',
+        IdToken: 'i',
+        RefreshToken: 'r',
+        ExpiresIn: 3600,
+      },
+    })
 
     const result = await password({
       ...base,
       identifySession: await identifySessionFor('jane@example.com'),
       password: 'correct horse',
+      now: issuedAt,
     })
 
     expect(result.status).toBe('authenticated')
     if (result.status !== 'authenticated') return
     expect(result.username).toBe('jane@example.com')
-    expect(await verifySession(result.asSession, KEY)).toMatchObject({
-      username: 'jane@example.com',
-      typ: 'as',
+    expect(result.tokens).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: issuedAt + 3600 * 1000,
     })
 
     const call = cognitoMock.commandCalls(AdminInitiateAuthCommand)[0]

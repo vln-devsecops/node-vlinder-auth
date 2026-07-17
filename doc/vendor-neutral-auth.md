@@ -263,13 +263,18 @@ app deliberately, unaffected by how the app itself authenticates).
 
 ## Migration sequencing (keep it green throughout)
 
-1. Land the auth Lambda + `/api/v1/auth` routes **alongside** the existing
-   `/api/v1/idp` proxy. Nothing consumes them yet.
-2. Move the SPA to `/api/v1/auth` behind the identifier-first flow; keep the
-   password path working end to end via the live e2e suite before touching
-   federation.
-3. Once the SPA no longer calls `/api/v1/idp`, delete the IDP proxy behavior,
-   its CloudFront function, and the custom origin.
+1. ✅ **Done.** Landed the auth Lambda + `/api/v1/auth` routes (`identify`,
+   `password`) **alongside** the existing `/api/v1/idp` proxy.
+2. ✅ **Login path done.** The SPA's **sign-in** now uses the two-step
+   identifier-first flow (`SignInFlow` → `/auth/identify` then `/auth/password`);
+   the direct-to-Cognito `signIn` is gone. **Transitional:** `/auth/password`
+   returns the tokens in the response body so the SPA keeps its current
+   `sessionStorage` + Bearer flow (no worse than today — the httpOnly-cookie +
+   cookie-authorizer switch is step 4). **Still on `/idp`:** signup / confirm /
+   resend / forgot / reset — migrate those next (needs the matching
+   `/api/v1/auth` endpoints) before step 3.
+3. Once the SPA no longer calls `/api/v1/idp` **at all**, delete the IDP proxy
+   behavior, its CloudFront function, and the custom origin.
 4. Add the **Layer-1 BFF handoff** (`/authorize` + `/token` + one-time-code
    table + RP client registry) and move the **admin API authorizer to read the
    AS session cookie**; prove it with a stub BFF RP in the e2e suite.

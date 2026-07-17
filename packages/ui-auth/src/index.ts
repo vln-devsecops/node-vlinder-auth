@@ -4,6 +4,9 @@ export type { SignUpFormProps, SignUpFormValues } from './SignUpForm'
 export { SignInButton } from './SignInButton'
 export type { SignInButtonProps } from './SignInButton'
 
+export { SignInFlow } from './SignInFlow'
+export type { IdentifyResult, SignInFlowProps } from './SignInFlow'
+
 export { VerifyEmailNotice } from './VerifyEmailNotice'
 export type { VerifyEmailNoticeProps } from './VerifyEmailNotice'
 
