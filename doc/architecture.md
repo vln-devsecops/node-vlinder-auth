@@ -32,7 +32,7 @@ All API traffic is namespaced under `/api/v1`. The IDP proxy and the admin
 API share that prefix; `/api/v1/idp*` is a higher-precedence behavior than
 `/api/v1/*`, so IDP requests never fall through to the admin API.
 
-```
+```text
                          auth.<zone>  (CloudFront: aws_cloudfront_distribution.auth_site)
                                  │
         ┌────────────────────────┼────────────────────────────────────┐
@@ -165,7 +165,7 @@ key, or every real invocation fails with an access-denied error.
 
 The Lambda source is a **versioned deliverable**, not vendored source:
 
-```
+```text
 node-vlinder-auth/packages/lambda-src
    └─ esbuild → one self-contained CJS bundle per handler
    └─ published to GitHub Packages as @vln-devsecops/auth-lambda  (cd_publish_lambda_src.yml)
