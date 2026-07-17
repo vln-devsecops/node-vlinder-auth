@@ -39,6 +39,7 @@ const handlers = [
   { in: 'src/post-confirmation/handler.ts', out: 'dist/post-confirmation/handler' },
   { in: 'src/pre-token-generation/handler.ts', out: 'dist/pre-token-generation/handler' },
   { in: 'src/admin-api/handler.ts', out: 'dist/admin-api/handler' },
+  { in: 'src/auth-api/handler.ts', out: 'dist/auth-api/handler' },
 ]
 
 for (const { in: entryPoint, out: outfile } of handlers) {
