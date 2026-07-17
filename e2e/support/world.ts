@@ -9,7 +9,12 @@ import {
   AdminGetUserCommand,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, PutCommand, GetCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb'
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  DeleteCommand,
+  QueryCommand,
+} from '@aws-sdk/lib-dynamodb'
 
 export interface Env {
   baseUrl: string
@@ -157,16 +162,24 @@ export class AuthWorld extends World {
    * app code should never write to this table directly -- only the
    * post-confirmation trigger and the admin API do that.
    */
-  async seedRoleAssignment(userId: string, roleId: string): Promise<void> {
+  async seedRoleAssignment(
+    userId: string,
+    roleId: string,
+    activation: 'default' | 'elevated' = 'default',
+  ): Promise<void> {
     if (!this.env.roleAssignmentsTableName) {
       throw new Error(
         'E2E_ROLE_ASSIGNMENTS_TABLE is not set; scenarios needing admin privileges require it',
       )
     }
+    const tenantId = this.env.defaultTenantId
     await this.ddb.send(
       new PutCommand({
         TableName: this.env.roleAssignmentsTableName,
-        Item: { userId, tenantId: this.env.defaultTenantId, roleId },
+        // One row per (user, tenant, role); range key is the tenantId#roleId
+        // composite. Seed roles default to `default` (active at login) so a
+        // seeded admin actually carries admin privileges in their token.
+        Item: { userId, tenantRole: `${tenantId}#${roleId}`, tenantId, roleId, activation },
       }),
     )
   }
@@ -212,21 +225,29 @@ export class AuthWorld extends World {
     return userId
   }
 
-  /** Reads back a role assignment written by the post-confirmation trigger (or seedRoleAssignment). */
-  async getRoleAssignment(userId: string): Promise<{ roleId: string; tenantId: string } | null> {
+  /**
+   * Reads back all of a user's role assignments (written by the
+   * post-confirmation trigger, seedRoleAssignment, or the admin API). A user
+   * may hold several roles, so this returns the full set.
+   */
+  async getRoleAssignments(
+    userId: string,
+  ): Promise<Array<{ roleId: string; tenantId: string; activation: string }>> {
     if (!this.env.roleAssignmentsTableName) {
       throw new Error('E2E_ROLE_ASSIGNMENTS_TABLE is not set')
     }
     const result = await this.ddb.send(
-      new GetCommand({
+      new QueryCommand({
         TableName: this.env.roleAssignmentsTableName,
-        Key: { userId, tenantId: this.env.defaultTenantId },
+        KeyConditionExpression: 'userId = :u',
+        ExpressionAttributeValues: { ':u': userId },
       }),
     )
-    if (!result.Item) {
-      return null
-    }
-    return { roleId: result.Item['roleId'] as string, tenantId: result.Item['tenantId'] as string }
+    return (result.Items ?? []).map((item) => ({
+      roleId: item['roleId'] as string,
+      tenantId: item['tenantId'] as string,
+      activation: (item['activation'] as string) ?? 'default',
+    }))
   }
 
   /** Registers a user created directly through the SPA (not via admin-create-user) for cleanup. */

@@ -51,17 +51,51 @@ Then('the managed user is disabled in Cognito', async function (this: AuthWorld)
   expect(enabled).toBe(false)
 })
 
-When('I change the managed user\'s role to {string}', async function (this: AuthWorld, roleId: string) {
-  await managedUserRow(this).locator('select[data-role-select]').selectOption(roleId)
+When('I grant the managed user the {string} role', async function (this: AuthWorld, roleId: string) {
+  const row = managedUserRow(this)
+  await row.locator('[data-add-role-select]').selectOption(roleId)
+  await row.locator('[data-action="add-role"]').click()
 })
 
-Then('the managed user\'s role assignment is {string}', async function (this: AuthWorld, roleId: string) {
+Then('the managed user holds the {string} role', async function (this: AuthWorld, roleId: string) {
   if (!this.managedUser) {
     throw new Error('No managed user set up for this scenario')
   }
-  const assignment = await pollUntil(
-    () => this.getRoleAssignment(this.managedUser!.userId),
-    (result) => result?.roleId === roleId,
+  const assignments = await pollUntil(
+    () => this.getRoleAssignments(this.managedUser!.userId),
+    (result) => result.some((a) => a.roleId === roleId),
   )
-  expect(assignment?.roleId).toBe(roleId)
+  expect(assignments.map((a) => a.roleId)).toContain(roleId)
 })
+
+Then(
+  'the managed user still holds the {string} role',
+  async function (this: AuthWorld, roleId: string) {
+    if (!this.managedUser) {
+      throw new Error('No managed user set up for this scenario')
+    }
+    const assignments = await this.getRoleAssignments(this.managedUser.userId)
+    expect(
+      assignments.map((a) => a.roleId),
+      'granting a new role must not remove existing ones',
+    ).toContain(roleId)
+  },
+)
+
+When('I remove the {string} role from the managed user', async function (this: AuthWorld, roleId: string) {
+  await managedUserRow(this).locator(`[data-role-item="${roleId}"] [data-action="remove-role"]`).click()
+})
+
+Then(
+  'the managed user no longer holds the {string} role',
+  async function (this: AuthWorld, roleId: string) {
+    if (!this.managedUser) {
+      throw new Error('No managed user set up for this scenario')
+    }
+    const assignments = await pollUntil(
+      () => this.getRoleAssignments(this.managedUser!.userId),
+      (result) => !result.some((a) => a.roleId === roleId),
+    )
+    expect(assignments.map((a) => a.roleId)).not.toContain(roleId)
+  },
+)

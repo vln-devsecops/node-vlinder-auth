@@ -60,7 +60,7 @@ describe('createAdminApiClient', () => {
     )
   })
 
-  it('sends a PUT with the roleId for assignRole', async () => {
+  it('PUTs the role under /roles/{roleId}, defaulting activation to elevated', async () => {
     fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
     const client = createAdminApiClient({
       baseUrl: 'https://admin-api.example.com',
@@ -70,22 +70,40 @@ describe('createAdminApiClient', () => {
     await client.assignRole('user-1', 'tenant-admin')
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://admin-api.example.com/users/user-1/role',
-      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ roleId: 'tenant-admin' }) }),
+      'https://admin-api.example.com/users/user-1/roles/tenant-admin',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ activation: 'elevated' }),
+      }),
     )
   })
 
-  it('sends a DELETE for revokeRole', async () => {
+  it('sends the chosen activation for assignRole', async () => {
     fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
     const client = createAdminApiClient({
       baseUrl: 'https://admin-api.example.com',
       getAccessToken: () => 'token-abc',
     })
 
-    await client.revokeRole('user-1')
+    await client.assignRole('user-1', 'tenant-admin', 'default')
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://admin-api.example.com/users/user-1/role',
+      'https://admin-api.example.com/users/user-1/roles/tenant-admin',
+      expect.objectContaining({ body: JSON.stringify({ activation: 'default' }) }),
+    )
+  })
+
+  it('DELETEs the specific role under /roles/{roleId} for revokeRole', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
+    const client = createAdminApiClient({
+      baseUrl: 'https://admin-api.example.com',
+      getAccessToken: () => 'token-abc',
+    })
+
+    await client.revokeRole('user-1', 'tenant-admin')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://admin-api.example.com/users/user-1/roles/tenant-admin',
       expect.objectContaining({ method: 'DELETE' }),
     )
   })
