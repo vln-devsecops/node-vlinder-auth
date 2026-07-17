@@ -1,5 +1,6 @@
 import { DeleteCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
+import { tenantRoleKey } from '../../shared/roleAssignments'
 import { NotFoundError } from './getUser'
 
 const PRIVILEGE_FAMILY = 'admin:users:write'
@@ -7,18 +8,20 @@ const PRIVILEGE_FAMILY = 'admin:users:write'
 export interface RevokeRoleParams {
   caller: CallerContext
   targetUserId: string
+  roleId: string
   ddbDocClient: DynamoDBDocumentClient
   roleAssignmentsTableName: string
 }
 
 /**
- * Removes a user's role assignment entirely, leaving them with zero
- * privileges until reassigned -- the pre-token-generation trigger treats a
- * missing assignment as "no permissions/tenantId claims", so this is a
- * complete revocation rather than a fallback to a default role.
+ * Removes one specific role from a user, leaving their other roles intact. The
+ * user's effective privileges become the union of whatever roles remain (or
+ * zero privileges if this was their last -- the pre-token-generation trigger
+ * treats no assignments as "no permissions/tenantId claims"). Deleting a role
+ * the user does not hold is a harmless no-op.
  */
 export async function revokeRole(params: RevokeRoleParams): Promise<void> {
-  const { caller, targetUserId, ddbDocClient, roleAssignmentsTableName } = params
+  const { caller, targetUserId, roleId, ddbDocClient, roleAssignmentsTableName } = params
 
   const result = await ddbDocClient.send(
     new QueryCommand({
@@ -39,7 +42,7 @@ export async function revokeRole(params: RevokeRoleParams): Promise<void> {
   await ddbDocClient.send(
     new DeleteCommand({
       TableName: roleAssignmentsTableName,
-      Key: { userId: targetUserId, tenantId: assignment.tenantId },
+      Key: { userId: targetUserId, tenantRole: tenantRoleKey(assignment.tenantId, roleId) },
     }),
   )
 }

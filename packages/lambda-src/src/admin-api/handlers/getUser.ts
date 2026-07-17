@@ -34,19 +34,18 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
       TableName: roleAssignmentsTableName,
       KeyConditionExpression: 'userId = :u',
       ExpressionAttributeValues: { ':u': targetUserId },
-      Limit: 1,
     }),
   )
 
-  const assignment = result.Items?.[0] as
-    | { userId: string; tenantId: string; roleId: string }
-    | undefined
-
-  if (!assignment) {
+  const rows = (result.Items ?? []) as Array<{ tenantId: string; roleId: string }>
+  if (rows.length === 0) {
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
-  assertTenantAccess(caller, PRIVILEGE_FAMILY, assignment.tenantId)
+  const tenantId = rows[0].tenantId
+  const roleIds = rows.filter((row) => row.tenantId === tenantId).map((row) => row.roleId)
+
+  assertTenantAccess(caller, PRIVILEGE_FAMILY, tenantId)
 
   const cognitoUser = await cognitoClient.send(
     new AdminGetUserCommand({ UserPoolId: userPoolId, Username: targetUserId }),
@@ -54,9 +53,9 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
   const email = cognitoUser.UserAttributes?.find((attr) => attr.Name === 'email')?.Value
 
   return {
-    userId: assignment.userId,
-    tenantId: assignment.tenantId,
-    roleId: assignment.roleId,
+    userId: targetUserId,
+    tenantId,
+    roleIds,
     email,
     enabled: cognitoUser.Enabled,
     userStatus: cognitoUser.UserStatus,

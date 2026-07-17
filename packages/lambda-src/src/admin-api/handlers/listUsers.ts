@@ -10,10 +10,34 @@ const PRIVILEGE_FAMILY = 'admin:users:read'
 export interface AdminUserSummary {
   userId: string
   tenantId: string
-  roleId: string
+  roleIds: string[]
   email?: string
   enabled?: boolean
   userStatus?: string
+}
+
+interface AssignmentRow {
+  userId: string
+  tenantId: string
+  roleId: string
+}
+
+/** Collapses per-role assignment rows into one entry per user, gathering roleIds. */
+function groupByUser(rows: AssignmentRow[]): Array<{
+  userId: string
+  tenantId: string
+  roleIds: string[]
+}> {
+  const byUser = new Map<string, { userId: string; tenantId: string; roleIds: string[] }>()
+  for (const row of rows) {
+    const existing = byUser.get(row.userId)
+    if (existing) {
+      existing.roleIds.push(row.roleId)
+    } else {
+      byUser.set(row.userId, { userId: row.userId, tenantId: row.tenantId, roleIds: [row.roleId] })
+    }
+  }
+  return [...byUser.values()]
 }
 
 export interface ListUsersParams {
@@ -51,7 +75,7 @@ export async function listUsers(params: ListUsersParams): Promise<ListUsersResul
       : await queryTenantAssignments(ddbDocClient, roleAssignmentsTableName, caller.tenantId!)
 
   const users = await Promise.all(
-    assignments.map((assignment) => hydrateUser(assignment, cognitoClient, userPoolId)),
+    groupByUser(assignments).map((user) => hydrateUser(user, cognitoClient, userPoolId)),
   )
 
   return { users: users.filter((user): user is AdminUserSummary => user !== null) }
@@ -82,14 +106,14 @@ async function scanAllAssignments(
 }
 
 async function hydrateUser(
-  assignment: { userId: string; tenantId: string; roleId: string },
+  user: { userId: string; tenantId: string; roleIds: string[] },
   cognitoClient: CognitoIdentityProviderClient,
   userPoolId: string,
 ): Promise<AdminUserSummary | null> {
   let cognitoUser
   try {
     cognitoUser = await cognitoClient.send(
-      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: assignment.userId }),
+      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: user.userId }),
     )
   } catch (error) {
     // A role assignment can outlive its Cognito user (deleted via the
@@ -105,9 +129,9 @@ async function hydrateUser(
   const email = cognitoUser.UserAttributes?.find((attr) => attr.Name === 'email')?.Value
 
   return {
-    userId: assignment.userId,
-    tenantId: assignment.tenantId,
-    roleId: assignment.roleId,
+    userId: user.userId,
+    tenantId: user.tenantId,
+    roleIds: user.roleIds,
     email,
     enabled: cognitoUser.Enabled,
     userStatus: cognitoUser.UserStatus,

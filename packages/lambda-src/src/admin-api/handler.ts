@@ -49,6 +49,7 @@ export async function handler(
     event.requestContext.authorizer.jwt.claims as Record<string, string | undefined>,
   )
   const targetUserId = event.pathParameters?.userId
+  const targetRoleId = event.pathParameters?.roleId
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 
   try {
@@ -94,21 +95,22 @@ export async function handler(
         return jsonResponse(200, result)
       }
 
-      case 'PUT /users/{userId}/role': {
+      case 'PUT /users/{userId}/roles/{roleId}': {
         await assignRole({
           caller,
           targetUserId: targetUserId!,
-          roleId: body.roleId as string,
+          roleId: targetRoleId!,
           ddbDocClient,
           roleAssignmentsTableName,
         })
         return jsonResponse(204)
       }
 
-      case 'DELETE /users/{userId}/role': {
+      case 'DELETE /users/{userId}/roles/{roleId}': {
         await revokeRole({
           caller,
           targetUserId: targetUserId!,
+          roleId: targetRoleId!,
           ddbDocClient,
           roleAssignmentsTableName,
         })

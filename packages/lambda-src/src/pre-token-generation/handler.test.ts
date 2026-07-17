@@ -111,7 +111,11 @@ describe('pre-token-generation handler', () => {
     expect(recordingHook.calls).toEqual([
       {
         event,
-        context: { tenantId: 'acme-corp', roleId: 'tenant-admin', privileges: ['users:read:own'] },
+        context: {
+          tenantId: 'acme-corp',
+          roleIds: ['tenant-admin'],
+          privileges: ['users:read:own'],
+        },
       },
     ])
   })

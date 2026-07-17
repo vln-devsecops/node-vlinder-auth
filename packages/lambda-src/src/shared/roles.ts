@@ -1,22 +1,24 @@
 import { GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
-import type { RoleAssignment, RoleDefinition } from './types'
+import type { RoleDefinition, UserRoleAssignments } from './types'
 
-export interface ResolveUserRoleAssignmentParams {
+export interface ResolveUserRoleAssignmentsParams {
   userId: string
   tableName: string
   ddbDocClient: DynamoDBDocumentClient
 }
 
 /**
- * Looks up a user's role assignment. v1 assumes a user is active in exactly
- * one tenant at a time (assigned at signup by post-confirmation); if the
- * partition key ever holds more than one item for a user, only the first
- * (lowest tenantId) is used. Supporting a user active across multiple
- * tenants simultaneously is a documented future extension, not v1 scope.
+ * Looks up all of a user's role assignments. A user may hold several roles at
+ * once; every one is returned so callers can union their privileges. v1 assumes
+ * a user is active in exactly one tenant (assigned at signup by
+ * post-confirmation); if the partition ever spans tenants, the first tenant
+ * seen anchors the result and only its roles are returned. Supporting a user
+ * active across multiple tenants simultaneously is a documented future
+ * extension, not v1 scope.
  */
-export async function resolveUserRoleAssignment(
-  params: ResolveUserRoleAssignmentParams,
-): Promise<RoleAssignment | undefined> {
+export async function resolveUserRoleAssignments(
+  params: ResolveUserRoleAssignmentsParams,
+): Promise<UserRoleAssignments | undefined> {
   const { userId, tableName, ddbDocClient } = params
 
   const result = await ddbDocClient.send(
@@ -24,20 +26,20 @@ export async function resolveUserRoleAssignment(
       TableName: tableName,
       KeyConditionExpression: 'userId = :u',
       ExpressionAttributeValues: { ':u': userId },
-      Limit: 1,
     }),
   )
 
-  const item = result.Items?.[0]
-  if (!item) {
+  const items = result.Items ?? []
+  if (items.length === 0) {
     return undefined
   }
 
-  return {
-    userId: item.userId as string,
-    tenantId: item.tenantId as string,
-    roleId: item.roleId as string,
-  }
+  const tenantId = items[0].tenantId as string
+  const roleIds = items
+    .filter((item) => item.tenantId === tenantId)
+    .map((item) => item.roleId as string)
+
+  return { userId, tenantId, roleIds }
 }
 
 export interface GetRoleDefinitionParams {

@@ -1,5 +1,5 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
-import { getRoleDefinition, resolveUserRoleAssignment } from './roles'
+import { getRoleDefinition, resolveUserRoleAssignments } from './roles'
 
 export interface ResolvePrivilegesForUserParams {
   userId: string
@@ -10,40 +10,45 @@ export interface ResolvePrivilegesForUserParams {
 
 export interface ResolvedPrivileges {
   tenantId: string | undefined
-  roleId: string | undefined
+  roleIds: string[]
   privileges: string[]
 }
 
 /**
- * Resolves a user's role assignment and expands it to a deduped privilege
- * list. This is the boundary between "role" (an app-defined name) and
- * "privilege" (what actually lands in the token) -- callers only ever see
- * privileges and the tenantId, never the role name itself.
+ * Resolves all of a user's roles and expands them to a single deduped privilege
+ * list -- the **union** across every role they hold. This is the boundary
+ * between "role" (an app-defined name) and "privilege" (what actually lands in
+ * the token) -- callers only ever see privileges and the tenantId, never the
+ * role names themselves.
  */
 export async function resolvePrivilegesForUser(
   params: ResolvePrivilegesForUserParams,
 ): Promise<ResolvedPrivileges> {
   const { userId, roleAssignmentsTableName, rolesTableName, ddbDocClient } = params
 
-  const assignment = await resolveUserRoleAssignment({
+  const assignments = await resolveUserRoleAssignments({
     userId,
     tableName: roleAssignmentsTableName,
     ddbDocClient,
   })
 
-  if (!assignment) {
-    return { tenantId: undefined, roleId: undefined, privileges: [] }
+  if (!assignments) {
+    return { tenantId: undefined, roleIds: [], privileges: [] }
   }
 
-  const role = await getRoleDefinition({
-    roleId: assignment.roleId,
-    tableName: rolesTableName,
-    ddbDocClient,
-  })
+  const roleDefinitions = await Promise.all(
+    assignments.roleIds.map((roleId) =>
+      getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
+    ),
+  )
+
+  const privileges = [
+    ...new Set(roleDefinitions.flatMap((role) => role?.privileges ?? [])),
+  ]
 
   return {
-    tenantId: assignment.tenantId,
-    roleId: assignment.roleId,
-    privileges: role ? [...new Set(role.privileges)] : [],
+    tenantId: assignments.tenantId,
+    roleIds: assignments.roleIds,
+    privileges,
   }
 }

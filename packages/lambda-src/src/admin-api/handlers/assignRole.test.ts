@@ -17,7 +17,7 @@ const commonParams = {
 }
 
 describe('assignRole', () => {
-  it('overwrites the role for a user in the caller\'s own tenant', async () => {
+  it('adds a role (composite key) for a user in the caller\'s own tenant', async () => {
     ddbMock
       .on(QueryCommand)
       .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }] })
@@ -33,8 +33,14 @@ describe('assignRole', () => {
     const putCall = ddbMock.commandCalls(PutCommand)[0]
     expect(putCall.args[0].input).toMatchObject({
       TableName: 'role-assignments-table',
-      Item: { userId: 'user-1', tenantId: 'acme-corp', roleId: 'tenant-admin' },
+      Item: {
+        userId: 'user-1',
+        tenantRole: 'acme-corp#tenant-admin',
+        tenantId: 'acme-corp',
+        roleId: 'tenant-admin',
+      },
     })
+    // Idempotent add, not a conditional create.
     expect(putCall.args[0].input.ConditionExpression).toBeUndefined()
   })
 
