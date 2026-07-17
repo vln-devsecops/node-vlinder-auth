@@ -33,7 +33,14 @@ export async function createInitialRoleAssignment(
     await ddbDocClient.send(
       new PutCommand({
         TableName: tableName,
-        Item: { userId, tenantRole: tenantRoleKey(tenantId, roleId), tenantId, roleId },
+        // The seed role is a default (login) role -- it is "what you log in as".
+        Item: {
+          userId,
+          tenantRole: tenantRoleKey(tenantId, roleId),
+          tenantId,
+          roleId,
+          activation: 'default',
+        },
         ConditionExpression: 'attribute_not_exists(userId)',
       }),
     )

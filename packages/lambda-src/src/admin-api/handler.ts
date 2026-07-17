@@ -100,6 +100,7 @@ export async function handler(
           caller,
           targetUserId: targetUserId!,
           roleId: targetRoleId!,
+          activation: body.activation === 'default' ? 'default' : 'elevated',
           ddbDocClient,
           roleAssignmentsTableName,
         })

@@ -43,18 +43,18 @@ describe('getUser', () => {
     expect(user).toEqual({
       userId: 'user-1',
       tenantId: 'acme-corp',
-      roleIds: ['member'],
+      roles: [{ roleId: 'member', activation: 'default' }],
       email: 'user1@acme.com',
       enabled: true,
       userStatus: 'CONFIRMED',
     })
   })
 
-  it('returns every role the user holds in their tenant', async () => {
+  it('returns every role the user holds, with its activation', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [
-        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' },
-        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member', activation: 'default' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing', activation: 'elevated' },
       ],
     })
     cognitoMock.on(AdminGetUserCommand).resolves({
@@ -69,7 +69,10 @@ describe('getUser', () => {
       ...commonParams,
     })
 
-    expect(user.roleIds).toEqual(['member', 'billing'])
+    expect(user.roles).toEqual([
+      { roleId: 'member', activation: 'default' },
+      { roleId: 'billing', activation: 'elevated' },
+    ])
   })
 
   it('rejects an "own"-scoped caller targeting a user in a different tenant', async () => {

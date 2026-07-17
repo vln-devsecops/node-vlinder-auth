@@ -4,6 +4,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
+import type { AssignedRole, RoleActivation } from '../../shared/types'
 import type { AdminUserSummary } from './listUsers'
 
 const PRIVILEGE_FAMILY = 'admin:users:read'
@@ -37,13 +38,19 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
     }),
   )
 
-  const rows = (result.Items ?? []) as Array<{ tenantId: string; roleId: string }>
+  const rows = (result.Items ?? []) as Array<{
+    tenantId: string
+    roleId: string
+    activation?: RoleActivation
+  }>
   if (rows.length === 0) {
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
   const tenantId = rows[0].tenantId
-  const roleIds = rows.filter((row) => row.tenantId === tenantId).map((row) => row.roleId)
+  const roles: AssignedRole[] = rows
+    .filter((row) => row.tenantId === tenantId)
+    .map((row) => ({ roleId: row.roleId, activation: row.activation ?? 'default' }))
 
   assertTenantAccess(caller, PRIVILEGE_FAMILY, tenantId)
 
@@ -55,7 +62,7 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
   return {
     userId: targetUserId,
     tenantId,
-    roleIds,
+    roles,
     email,
     enabled: cognitoUser.Enabled,
     userStatus: cognitoUser.UserStatus,

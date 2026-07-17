@@ -48,7 +48,7 @@ describe('listUsers', () => {
       {
         userId: 'user-1',
         tenantId: 'acme-corp',
-        roleIds: ['member'],
+        roles: [{ roleId: 'member', activation: 'default' }],
         email: 'user1@acme.com',
         enabled: true,
         userStatus: 'CONFIRMED',
@@ -56,11 +56,11 @@ describe('listUsers', () => {
     ])
   })
 
-  it('collapses a user\'s multiple role rows into one entry with all roleIds', async () => {
+  it('collapses a user\'s multiple role rows into one entry with all roles', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [
-        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' },
-        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member', activation: 'default' },
+        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'billing', activation: 'elevated' },
       ],
     })
     cognitoMock.on(AdminGetUserCommand).resolves({
@@ -79,7 +79,10 @@ describe('listUsers', () => {
     })
 
     expect(result.users).toHaveLength(1)
-    expect(result.users[0].roleIds).toEqual(['member', 'billing'])
+    expect(result.users[0].roles).toEqual([
+      { roleId: 'member', activation: 'default' },
+      { roleId: 'billing', activation: 'elevated' },
+    ])
     // Cognito hydrated once per user, not once per role row.
     expect(cognitoMock.commandCalls(AdminGetUserCommand)).toHaveLength(1)
   })

@@ -4,13 +4,14 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { QueryCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { resolveAccessScope, ForbiddenError, type CallerContext } from '../authz'
+import type { AssignedRole, RoleActivation } from '../../shared/types'
 
 const PRIVILEGE_FAMILY = 'admin:users:read'
 
 export interface AdminUserSummary {
   userId: string
   tenantId: string
-  roleIds: string[]
+  roles: AssignedRole[]
   email?: string
   enabled?: boolean
   userStatus?: string
@@ -20,21 +21,25 @@ interface AssignmentRow {
   userId: string
   tenantId: string
   roleId: string
+  activation?: RoleActivation
 }
 
-/** Collapses per-role assignment rows into one entry per user, gathering roleIds. */
-function groupByUser(rows: AssignmentRow[]): Array<{
+interface GroupedUser {
   userId: string
   tenantId: string
-  roleIds: string[]
-}> {
-  const byUser = new Map<string, { userId: string; tenantId: string; roleIds: string[] }>()
+  roles: AssignedRole[]
+}
+
+/** Collapses per-role assignment rows into one entry per user, gathering roles. */
+function groupByUser(rows: AssignmentRow[]): GroupedUser[] {
+  const byUser = new Map<string, GroupedUser>()
   for (const row of rows) {
+    const role: AssignedRole = { roleId: row.roleId, activation: row.activation ?? 'default' }
     const existing = byUser.get(row.userId)
     if (existing) {
-      existing.roleIds.push(row.roleId)
+      existing.roles.push(role)
     } else {
-      byUser.set(row.userId, { userId: row.userId, tenantId: row.tenantId, roleIds: [row.roleId] })
+      byUser.set(row.userId, { userId: row.userId, tenantId: row.tenantId, roles: [role] })
     }
   }
   return [...byUser.values()]
@@ -85,7 +90,7 @@ async function queryTenantAssignments(
   ddbDocClient: DynamoDBDocumentClient,
   tableName: string,
   tenantId: string,
-): Promise<Array<{ userId: string; tenantId: string; roleId: string }>> {
+): Promise<AssignmentRow[]> {
   const result = await ddbDocClient.send(
     new QueryCommand({
       TableName: tableName,
@@ -94,19 +99,19 @@ async function queryTenantAssignments(
       ExpressionAttributeValues: { ':t': tenantId },
     }),
   )
-  return (result.Items ?? []) as Array<{ userId: string; tenantId: string; roleId: string }>
+  return (result.Items ?? []) as AssignmentRow[]
 }
 
 async function scanAllAssignments(
   ddbDocClient: DynamoDBDocumentClient,
   tableName: string,
-): Promise<Array<{ userId: string; tenantId: string; roleId: string }>> {
+): Promise<AssignmentRow[]> {
   const result = await ddbDocClient.send(new ScanCommand({ TableName: tableName }))
-  return (result.Items ?? []) as Array<{ userId: string; tenantId: string; roleId: string }>
+  return (result.Items ?? []) as AssignmentRow[]
 }
 
 async function hydrateUser(
-  user: { userId: string; tenantId: string; roleIds: string[] },
+  user: GroupedUser,
   cognitoClient: CognitoIdentityProviderClient,
   userPoolId: string,
 ): Promise<AdminUserSummary | null> {
@@ -131,7 +136,7 @@ async function hydrateUser(
   return {
     userId: user.userId,
     tenantId: user.tenantId,
-    roleIds: user.roleIds,
+    roles: user.roles,
     email,
     enabled: cognitoUser.Enabled,
     userStatus: cognitoUser.UserStatus,

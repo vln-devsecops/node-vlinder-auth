@@ -10,11 +10,13 @@ beforeEach(() => {
 })
 
 describe('resolveUserRoleAssignments', () => {
-  it('returns all of the user\'s roles within their tenant', async () => {
+  it('returns all of the user\'s roles with their activation', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [
-        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' },
-        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'billing' },
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin', activation: 'default' },
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'billing', activation: 'elevated' },
+        // A legacy row without the attribute is treated as a default role.
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'legacy' },
       ],
     })
 
@@ -27,7 +29,11 @@ describe('resolveUserRoleAssignments', () => {
     expect(assignments).toEqual({
       userId: 'user-123',
       tenantId: 'acme-corp',
-      roleIds: ['tenant-admin', 'billing'],
+      roles: [
+        { roleId: 'tenant-admin', activation: 'default' },
+        { roleId: 'billing', activation: 'elevated' },
+        { roleId: 'legacy', activation: 'default' },
+      ],
     })
     // No Limit -- must fetch every role the user holds.
     const queryCall = ddbMock.commandCalls(QueryCommand)[0]

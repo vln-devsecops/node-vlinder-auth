@@ -68,6 +68,32 @@ describe('resolvePrivilegesForUser', () => {
     )
   })
 
+  it('unions only the default (login) roles, excluding elevated ones', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'reader', activation: 'default' },
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'superadmin', activation: 'elevated' },
+      ],
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'reader' } }).resolves({
+      Item: { roleId: 'reader', privileges: ['users:read:own'], tenantScope: 'tenant' },
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'superadmin' } }).resolves({
+      Item: { roleId: 'superadmin', privileges: ['users:write:*'], tenantScope: 'global' },
+    })
+
+    const resolved = await resolvePrivilegesForUser({
+      userId: 'user-123',
+      roleAssignmentsTableName: 'role-assignments-table',
+      rolesTableName: 'roles-table',
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    // superadmin is held but elevated -> its privileges must NOT be in the login token.
+    expect(resolved.roleIds).toEqual(['reader'])
+    expect(resolved.privileges).toEqual(['users:read:own'])
+  })
+
   it('returns no tenant/privileges when the user has no role assignment', async () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] })
 

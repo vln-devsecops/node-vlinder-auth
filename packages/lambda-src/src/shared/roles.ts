@@ -1,5 +1,5 @@
 import { GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
-import type { RoleDefinition, UserRoleAssignments } from './types'
+import type { RoleActivation, RoleDefinition, UserRoleAssignments } from './types'
 
 export interface ResolveUserRoleAssignmentsParams {
   userId: string
@@ -35,11 +35,15 @@ export async function resolveUserRoleAssignments(
   }
 
   const tenantId = items[0].tenantId as string
-  const roleIds = items
+  const roles = items
     .filter((item) => item.tenantId === tenantId)
-    .map((item) => item.roleId as string)
+    .map((item) => ({
+      roleId: item.roleId as string,
+      // Older rows written before activation existed default to a login role.
+      activation: (item.activation ?? 'default') as RoleActivation,
+    }))
 
-  return { userId, tenantId, roleIds }
+  return { userId, tenantId, roles }
 }
 
 export interface GetRoleDefinitionParams {

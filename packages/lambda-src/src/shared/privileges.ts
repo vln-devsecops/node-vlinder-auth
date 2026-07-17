@@ -10,16 +10,19 @@ export interface ResolvePrivilegesForUserParams {
 
 export interface ResolvedPrivileges {
   tenantId: string | undefined
+  /** The active (default) roles whose privileges are unioned into the token. */
   roleIds: string[]
   privileges: string[]
 }
 
 /**
- * Resolves all of a user's roles and expands them to a single deduped privilege
- * list -- the **union** across every role they hold. This is the boundary
- * between "role" (an app-defined name) and "privilege" (what actually lands in
- * the token) -- callers only ever see privileges and the tenantId, never the
- * role names themselves.
+ * Resolves a user's **login** privileges: the deduped union of the privileges
+ * of their `default` (active-at-login) roles. Roles the user holds as
+ * `elevated` are ignored here -- they contribute nothing until a sudo step-up
+ * (future) resolves privileges including chosen elevated roles. This is the
+ * boundary between "role" (an app-defined name) and "privilege" (what actually
+ * lands in the token) -- callers only ever see privileges and the tenantId,
+ * never the role names themselves.
  */
 export async function resolvePrivilegesForUser(
   params: ResolvePrivilegesForUserParams,
@@ -36,19 +39,21 @@ export async function resolvePrivilegesForUser(
     return { tenantId: undefined, roleIds: [], privileges: [] }
   }
 
+  const activeRoleIds = assignments.roles
+    .filter((role) => role.activation === 'default')
+    .map((role) => role.roleId)
+
   const roleDefinitions = await Promise.all(
-    assignments.roleIds.map((roleId) =>
+    activeRoleIds.map((roleId) =>
       getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
     ),
   )
 
-  const privileges = [
-    ...new Set(roleDefinitions.flatMap((role) => role?.privileges ?? [])),
-  ]
+  const privileges = [...new Set(roleDefinitions.flatMap((role) => role?.privileges ?? []))]
 
   return {
     tenantId: assignments.tenantId,
-    roleIds: assignments.roleIds,
+    roleIds: activeRoleIds,
     privileges,
   }
 }
