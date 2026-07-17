@@ -32,7 +32,7 @@ All API traffic is namespaced under `/api/v1`. The IDP proxy and the admin
 API share that prefix; `/api/v1/idp*` is a higher-precedence behavior than
 `/api/v1/*`, so IDP requests never fall through to the admin API.
 
-```
+```text
                          auth.<zone>  (CloudFront: aws_cloudfront_distribution.auth_site)
                                  │
         ┌────────────────────────┼────────────────────────────────────┐
@@ -111,6 +111,16 @@ Privilege naming convention:
 | `<family>:*` | Acts across all tenants (super-admin). |
 | `<family>` | Ungated reference data, no tenant scoping. |
 
+Effective access is the **intersection** of two inputs: the caller's role
+privileges (the `permissions` claim) and *this token's* granted scopes (an
+optional OAuth-style `scope` claim, same privilege shape). The narrower of the
+two wins per family, so a token can be **downscoped** below its role but never
+above it. A token with **no `scope` claim** is not downscoped — the role
+governs (absence of a scope means full subject authority). No issuer emits a
+`scope` claim today, so current behaviour is unchanged; the mechanism is in
+place for the OAuth-style token model in
+[`doc/vendor-neutral-auth.md`](./vendor-neutral-auth.md).
+
 Backed by three native DynamoDB tables, all CMK-encrypted:
 
 - **roles** — the seeded role catalog.
@@ -155,7 +165,7 @@ key, or every real invocation fails with an access-denied error.
 
 The Lambda source is a **versioned deliverable**, not vendored source:
 
-```
+```text
 node-vlinder-auth/packages/lambda-src
    └─ esbuild → one self-contained CJS bundle per handler
    └─ published to GitHub Packages as @vln-devsecops/auth-lambda  (cd_publish_lambda_src.yml)

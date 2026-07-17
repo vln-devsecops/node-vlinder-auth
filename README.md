@@ -48,7 +48,7 @@ its own privileges, documented here since it's the one piece of this repo
 that actually enforces it (downstream consumers of `cognito_auth` are free to
 invent their own privilege vocabulary for their own APIs):
 
-```
+```text
 <privilege-family>:own   e.g. admin:users:read:own   -- same tenant as the caller only
 <privilege-family>:*     e.g. admin:users:read:*      -- every tenant (super-admin)
 <privilege-name>         e.g. admin:roles:read         -- ungated by tenant (reference data)
