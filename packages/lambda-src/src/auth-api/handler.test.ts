@@ -1,7 +1,10 @@
 import {
   AdminInitiateAuthCommand,
   CognitoIdentityProviderClient,
+  ConfirmForgotPasswordCommand,
   NotAuthorizedException,
+  SignUpCommand,
+  UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider'
 import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
@@ -94,6 +97,58 @@ describe('auth-api handler', () => {
   it('401s when the password step has no identify cookie', async () => {
     const res = await handler(event('POST /auth/password', { body: { password: 'pw' } }))
     expect(res.statusCode).toBe(401)
+  })
+
+  it('POST /auth/signup routes to Cognito SignUp with the name attributes', async () => {
+    cognitoMock.on(SignUpCommand).resolves({ UserSub: 'sub-1' })
+
+    const res = await handler(
+      event('POST /auth/signup', {
+        body: { email: 'jane@x.com', password: 'pw', givenName: 'Jane', familyName: 'Doe' },
+      }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(cognitoMock.commandCalls(SignUpCommand)[0].args[0].input).toMatchObject({
+      ClientId: 'client-abc',
+      Username: 'jane@x.com',
+      UserAttributes: [
+        { Name: 'given_name', Value: 'Jane' },
+        { Name: 'family_name', Value: 'Doe' },
+      ],
+    })
+  })
+
+  it('maps a self-service Cognito client fault to a 400 with its message', async () => {
+    cognitoMock
+      .on(SignUpCommand)
+      .rejects(new UsernameExistsException({ message: 'User already exists', $metadata: {} }))
+
+    const res = await handler(
+      event('POST /auth/signup', {
+        body: { email: 'jane@x.com', password: 'pw', givenName: 'Jane', familyName: 'Doe' },
+      }),
+    )
+
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body!).error).toBe('User already exists')
+  })
+
+  it('POST /auth/reset routes to Cognito ConfirmForgotPassword', async () => {
+    cognitoMock.on(ConfirmForgotPasswordCommand).resolves({})
+
+    const res = await handler(
+      event('POST /auth/reset', {
+        body: { email: 'jane@x.com', code: '123456', newPassword: 'new-pw' },
+      }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(cognitoMock.commandCalls(ConfirmForgotPasswordCommand)[0].args[0].input).toMatchObject({
+      Username: 'jane@x.com',
+      ConfirmationCode: '123456',
+      Password: 'new-pw',
+    })
   })
 
   it('404s an unrecognized route', async () => {
