@@ -1,12 +1,15 @@
 import { createAdminApiClient, type AdminUser } from './apiClient'
 import { isMultiTenant } from './authConfig'
-import { loadTokens, isTokenExpired } from './session'
+import { loadSession, isSessionExpired } from './session'
 import { loadConfig } from './config'
 import { filterUsers, renderUserTable } from './userTable'
 
 async function main(): Promise<void> {
-  const tokens = loadTokens()
-  if (!tokens || isTokenExpired(tokens)) {
+  // The token itself is an HttpOnly cookie the SPA can't read; this marker only
+  // tells us whether to bother rendering or bounce to the login page. The
+  // cookie is the real credential (sent automatically on the API calls below).
+  const session = loadSession()
+  if (!session || isSessionExpired(session)) {
     window.location.href = '/'
     return
   }
@@ -14,10 +17,7 @@ async function main(): Promise<void> {
   const config = await loadConfig()
   const multiTenant = isMultiTenant(config.multiTenant)
 
-  const apiClient = createAdminApiClient({
-    baseUrl: '/api/v1',
-    getAccessToken: () => tokens.accessToken,
-  })
+  const apiClient = createAdminApiClient({ baseUrl: '/api/v1' })
 
   const tableContainer = document.getElementById('user-table')!
   const searchInput = document.getElementById('search') as HTMLInputElement

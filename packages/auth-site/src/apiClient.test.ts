@@ -17,29 +17,20 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
 }
 
 describe('createAdminApiClient', () => {
-  it('sends the access token as a Bearer header on every request', async () => {
+  it('sends same-origin credentials (the cookie) and no Authorization header', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ users: [] }))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await client.listUsers()
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://admin-api.example.com/users',
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer token-abc' }),
-      }),
-    )
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.credentials).toBe('same-origin')
+    expect(init.headers?.Authorization).toBeUndefined()
   })
 
   it('returns the users array from GET /users', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ users: [{ userId: 'user-1' }] }))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     const users = await client.listUsers()
     expect(users).toEqual([{ userId: 'user-1' }])
@@ -47,10 +38,7 @@ describe('createAdminApiClient', () => {
 
   it('sends a PATCH with the enabled flag for setUserEnabled', async () => {
     fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await client.setUserEnabled('user-1', false)
 
@@ -62,10 +50,7 @@ describe('createAdminApiClient', () => {
 
   it('PUTs the role under /roles/{roleId}, defaulting activation to elevated', async () => {
     fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await client.assignRole('user-1', 'tenant-admin')
 
@@ -80,10 +65,7 @@ describe('createAdminApiClient', () => {
 
   it('sends the chosen activation for assignRole', async () => {
     fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await client.assignRole('user-1', 'tenant-admin', 'default')
 
@@ -95,10 +77,7 @@ describe('createAdminApiClient', () => {
 
   it('DELETEs the specific role under /roles/{roleId} for revokeRole', async () => {
     fetchMock.mockResolvedValue(jsonResponse(undefined, true, 204))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await client.revokeRole('user-1', 'tenant-admin')
 
@@ -110,10 +89,7 @@ describe('createAdminApiClient', () => {
 
   it('throws with the response body\'s error message on a non-ok response', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: 'nope' }, false, 403))
-    const client = createAdminApiClient({
-      baseUrl: 'https://admin-api.example.com',
-      getAccessToken: () => 'token-abc',
-    })
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await expect(client.listUsers()).rejects.toThrow('nope')
   })

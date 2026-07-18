@@ -7,8 +7,7 @@ import {
   VerifyEmailNotice,
   ConfirmSignUpForm,
 } from '@vln-devsecops/auth-ui'
-import type { CognitoTokens } from './authConfig'
-import { saveTokens } from './session'
+import { saveSession } from './session'
 
 type Page = 'signin' | 'signup' | 'forgot' | 'verify'
 
@@ -58,8 +57,12 @@ async function identify(
   return (await response.json()) as { method: 'password' | 'redirect'; location?: string }
 }
 
-/** Step 2 (local accounts): submit the password; the identifier rides its cookie. */
-async function submitPassword(password: string): Promise<CognitoTokens> {
+/**
+ * Step 2 (local accounts): submit the password; the identifier rides its cookie.
+ * On success the backend sets the auth token as an HttpOnly cookie and returns
+ * only when the session expires -- the SPA never sees the token itself.
+ */
+async function submitPassword(password: string): Promise<{ expiresAt: number }> {
   const response = await fetch(`${AUTH_URL}/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -69,8 +72,7 @@ async function submitPassword(password: string): Promise<CognitoTokens> {
   if (!response.ok) {
     throw new Error(await authErrorMessage(response, 'Sign-in failed'))
   }
-  const body = (await response.json()) as { tokens: CognitoTokens }
-  return body.tokens
+  return (await response.json()) as { expiresAt: number }
 }
 
 const signUp = (values: {
@@ -103,8 +105,8 @@ function App() {
 
   const handlePassword = async (_identifier: string, password: string) => {
     setError(null)
-    const tokens = await submitPassword(password)
-    saveTokens(tokens)
+    const session = await submitPassword(password)
+    saveSession(session)
     window.location.href = '/admin'
   }
 

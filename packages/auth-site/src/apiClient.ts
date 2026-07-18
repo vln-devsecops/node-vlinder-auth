@@ -23,7 +23,6 @@ export interface RoleDefinition {
 
 export interface AdminApiClientConfig {
   baseUrl: string
-  getAccessToken: () => string | undefined
 }
 
 export interface AdminApiClient {
@@ -39,12 +38,12 @@ export interface AdminApiClient {
 /** Thin fetch wrapper over cognito_auth's bundled admin API. No framework, no build step beyond Vite. */
 export function createAdminApiClient(config: AdminApiClientConfig): AdminApiClient {
   async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    // Auth rides the HttpOnly session cookie (same-origin) -- the admin API's
+    // edge function turns it into the Authorization header. The SPA holds no
+    // token and sends no Authorization header itself.
     const response = await fetch(`${config.baseUrl}${path}`, {
       ...options,
-      headers: {
-        ...options.headers,
-        Authorization: `Bearer ${config.getAccessToken() ?? ''}`,
-      },
+      credentials: 'same-origin',
     })
 
     const body = response.status === 204 ? undefined : await response.json()
