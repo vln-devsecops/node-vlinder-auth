@@ -5,7 +5,12 @@ import { AuthFailedError, InvalidSessionError, password } from './handlers/passw
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
 import { CognitoClientError } from './cognitoError'
-import { IDENTIFY_SESSION_COOKIE, parseCookies, serializeSessionCookie } from './session'
+import {
+  AS_SESSION_COOKIE,
+  IDENTIFY_SESSION_COOKIE,
+  parseCookies,
+  serializeSessionCookie,
+} from './session'
 import { IDENTIFY_SESSION_TTL_SECONDS } from './handlers/identify'
 
 function requireEnv(key: string): string {
@@ -74,9 +79,20 @@ export async function handler(
             challengeSession: result.challengeSession,
           })
         }
-        // Transitional: tokens in the body for the same-origin SPA's
-        // sessionStorage flow (see handlers/password.ts).
-        return json(200, { tokens: result.tokens })
+        // Deliver the access token as an HttpOnly, same-origin session cookie
+        // (Path=/ so it reaches /api/v1/*, where the admin API's edge function
+        // turns it into an Authorization header). The SPA never sees the token;
+        // it gets only the expiry, to drive its redirect guard.
+        const maxAgeSeconds = Math.max(
+          0,
+          Math.floor((result.tokens.expiresAt - Date.now()) / 1000),
+        )
+        return json(200, { expiresAt: result.tokens.expiresAt }, [
+          serializeSessionCookie(AS_SESSION_COOKIE, result.tokens.accessToken, {
+            maxAgeSeconds,
+            path: '/',
+          }),
+        ])
       }
 
       case 'POST /auth/signup': {

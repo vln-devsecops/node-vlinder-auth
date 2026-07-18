@@ -1,49 +1,46 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import type { CognitoTokens } from './authConfig'
-import { saveTokens, loadTokens, clearTokens, isTokenExpired } from './session'
-
-const makeTokens = (expiresAt: number): CognitoTokens => ({
-  accessToken: 'access',
-  idToken: 'id',
-  refreshToken: 'refresh',
-  expiresAt,
-})
+import { saveSession, loadSession, clearSession, isSessionExpired } from './session'
 
 beforeEach(() => {
   sessionStorage.clear()
 })
 
-describe('saveTokens / loadTokens', () => {
-  it('round-trips tokens through sessionStorage', () => {
-    const tokens = makeTokens(Date.now() + 3600_000)
-    saveTokens(tokens)
-    expect(loadTokens()).toEqual(tokens)
+describe('saveSession / loadSession', () => {
+  it('round-trips the session marker through sessionStorage', () => {
+    const marker = { expiresAt: Date.now() + 3600_000 }
+    saveSession(marker)
+    expect(loadSession()).toEqual(marker)
   })
 
   it('returns null when nothing is stored', () => {
-    expect(loadTokens()).toBeNull()
+    expect(loadSession()).toBeNull()
   })
 
   it('returns null for corrupt data', () => {
-    sessionStorage.setItem('auth_tokens', 'not-json')
-    expect(loadTokens()).toBeNull()
+    sessionStorage.setItem('auth_session', 'not-json')
+    expect(loadSession()).toBeNull()
+  })
+
+  it('returns null when the stored value lacks a numeric expiresAt', () => {
+    sessionStorage.setItem('auth_session', JSON.stringify({ nope: true }))
+    expect(loadSession()).toBeNull()
   })
 })
 
-describe('clearTokens', () => {
-  it('removes stored tokens', () => {
-    saveTokens(makeTokens(Date.now() + 3600_000))
-    clearTokens()
-    expect(loadTokens()).toBeNull()
+describe('clearSession', () => {
+  it('removes the stored marker', () => {
+    saveSession({ expiresAt: Date.now() + 3600_000 })
+    clearSession()
+    expect(loadSession()).toBeNull()
   })
 })
 
-describe('isTokenExpired', () => {
+describe('isSessionExpired', () => {
   it('returns false for a future expiresAt', () => {
-    expect(isTokenExpired(makeTokens(Date.now() + 60_000))).toBe(false)
+    expect(isSessionExpired({ expiresAt: Date.now() + 60_000 })).toBe(false)
   })
 
   it('returns true for a past expiresAt', () => {
-    expect(isTokenExpired(makeTokens(Date.now() - 1))).toBe(true)
+    expect(isSessionExpired({ expiresAt: Date.now() - 1 })).toBe(true)
   })
 })
