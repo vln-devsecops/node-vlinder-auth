@@ -7,12 +7,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { handler } from './handler'
-import {
-  AS_SESSION_COOKIE,
-  IDENTIFY_SESSION_COOKIE,
-  signSession,
-  verifySession,
-} from './session'
+import { IDENTIFY_SESSION_COOKIE, signSession, verifySession } from './session'
 
 const KEY = 'test-signing-key-000000000000000000000000'
 const cognitoMock = mockClient(CognitoIdentityProviderClient)
@@ -62,8 +57,10 @@ describe('auth-api handler', () => {
     expect(res.statusCode).toBe(400)
   })
 
-  it('POST /auth/password authenticates and sets the AS session cookie', async () => {
-    cognitoMock.on(AdminInitiateAuthCommand).resolves({ AuthenticationResult: { IdToken: 'i' } })
+  it('POST /auth/password authenticates and returns the tokens in the body', async () => {
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
     const token = await signSession({ identifier: 'jane@x.com', method: 'password' }, KEY, 300)
     const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
 
@@ -72,10 +69,11 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
-    const setCookie = res.cookies!.find((c) => c.startsWith(AS_SESSION_COOKIE))!
-    expect(await verifySession(cookieValue(setCookie), KEY)).toMatchObject({
-      username: 'jane@x.com',
-    })
+    const body = JSON.parse(res.body!)
+    expect(body.tokens).toMatchObject({ accessToken: 'a', idToken: 'i', refreshToken: 'r' })
+    expect(typeof body.tokens.expiresAt).toBe('number')
+    // No token material as a Set-Cookie in the transitional model.
+    expect(res.cookies).toBeUndefined()
   })
 
   it('POST /auth/password 401s on bad credentials without an AS cookie', async () => {

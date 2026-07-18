@@ -1,38 +1,57 @@
 import { createRoot } from 'react-dom/client'
 import { useState, useEffect } from 'react'
 import {
-  SignInButton,
+  SignInFlow,
   SignUpForm,
   ForgotPasswordForm,
   VerifyEmailNotice,
   ConfirmSignUpForm,
 } from '@vln-devsecops/auth-ui'
-import { buildInitiateAuthBody, parseAuthResult } from './authConfig'
+import type { CognitoTokens } from './authConfig'
 import { saveTokens } from './session'
 import { loadConfig, type SiteConfig } from './config'
 
 type Page = 'signin' | 'signup' | 'forgot' | 'verify'
 
 const IDP_URL = '/api/v1/idp'
+const AUTH_URL = '/api/v1/auth'
 
-async function signIn(
-  clientId: string,
-  email: string,
-  password: string,
-): Promise<ReturnType<typeof parseAuthResult>> {
-  const response = await fetch(IDP_URL, {
+async function authErrorMessage(response: Response, fallback: string): Promise<string> {
+  const body = (await response.json().catch(() => ({}))) as { error?: string }
+  return body.error ?? `${fallback}: ${response.status}`
+}
+
+/**
+ * Vendor-neutral, identifier-first sign-in. Step 1: resolve the identifier to
+ * how it authenticates (the backend does home-realm discovery). The SPA never
+ * speaks to the identity provider directly -- see doc/vendor-neutral-auth.md.
+ */
+async function identify(identifier: string): Promise<{ method: 'password' | 'redirect'; location?: string }> {
+  const response = await fetch(`${AUTH_URL}/identify`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
-    },
-    body: JSON.stringify(buildInitiateAuthBody(clientId, email, password)),
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ identifier }),
   })
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string }
-    throw new Error(body.message ?? `Sign-in failed: ${response.status}`)
+    throw new Error(await authErrorMessage(response, 'Sign-in failed'))
   }
-  return parseAuthResult((await response.json()) as Record<string, Record<string, unknown>>)
+  return (await response.json()) as { method: 'password' | 'redirect'; location?: string }
+}
+
+/** Step 2 (local accounts): submit the password; the identifier rides its cookie. */
+async function submitPassword(password: string): Promise<CognitoTokens> {
+  const response = await fetch(`${AUTH_URL}/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ password }),
+  })
+  if (!response.ok) {
+    throw new Error(await authErrorMessage(response, 'Sign-in failed'))
+  }
+  const body = (await response.json()) as { tokens: CognitoTokens }
+  return body.tokens
 }
 
 async function signUp(
@@ -160,15 +179,16 @@ function App() {
     return <p>Loading…</p>
   }
 
-  const handleSignIn = async (values: { email: string; password: string }) => {
+  const handleIdentify = (identifier: string) => {
     setError(null)
-    try {
-      const tokens = await signIn(config.userPoolClientId, values.email, values.password)
-      saveTokens(tokens)
-      window.location.href = '/admin'
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Sign-in failed')
-    }
+    return identify(identifier)
+  }
+
+  const handlePassword = async (_identifier: string, password: string) => {
+    setError(null)
+    const tokens = await submitPassword(password)
+    saveTokens(tokens)
+    window.location.href = '/admin'
   }
 
   const handleSignUp = async (values: {
@@ -236,7 +256,7 @@ function App() {
 
       {page === 'signin' && (
         <>
-          <SignInButton onSubmit={handleSignIn} />
+          <SignInFlow onIdentify={handleIdentify} onPassword={handlePassword} onError={setError} />
           <button onClick={() => { setError(null); setPage('signup') }}>Create account</button>
           <button onClick={() => { setError(null); setPage('forgot') }}>Forgot password?</button>
         </>

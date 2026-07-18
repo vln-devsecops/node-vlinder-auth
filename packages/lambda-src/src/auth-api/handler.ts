@@ -2,14 +2,8 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { getCognitoClient } from '../shared/cognito-client'
 import { identify, InvalidIdentifierError } from './handlers/identify'
 import { AuthFailedError, InvalidSessionError, password } from './handlers/password'
-import {
-  IDENTIFY_SESSION_COOKIE,
-  AS_SESSION_COOKIE,
-  parseCookies,
-  serializeSessionCookie,
-} from './session'
+import { IDENTIFY_SESSION_COOKIE, parseCookies, serializeSessionCookie } from './session'
 import { IDENTIFY_SESSION_TTL_SECONDS } from './handlers/identify'
-import { AS_SESSION_TTL_SECONDS } from './handlers/password'
 
 function requireEnv(key: string): string {
   const value = process.env[key]
@@ -35,8 +29,9 @@ function json(
 /**
  * Public auth API for the vendor-neutral login flow (no JWT authorizer -- this
  * is how a token is obtained in the first place). Routes on routeKey. The SPA
- * talks to these same-origin; the identify/AS sessions travel as HttpOnly
- * cookies so no token material reaches browser JS.
+ * talks to these same-origin; the in-flight identify session travels as an
+ * HttpOnly cookie. Transitional: /auth/password returns the auth tokens in the
+ * body for the SPA's current sessionStorage flow (see handlers/password.ts).
  */
 export async function handler(
   event: APIGatewayProxyEventV2,
@@ -76,11 +71,9 @@ export async function handler(
             challengeSession: result.challengeSession,
           })
         }
-        return json(200, {}, [
-          serializeSessionCookie(AS_SESSION_COOKIE, result.asSession, {
-            maxAgeSeconds: AS_SESSION_TTL_SECONDS,
-          }),
-        ])
+        // Transitional: tokens in the body for the same-origin SPA's
+        // sessionStorage flow (see handlers/password.ts).
+        return json(200, { tokens: result.tokens })
       }
 
       default:

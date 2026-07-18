@@ -4,20 +4,27 @@ import {
   NotAuthorizedException,
   UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { signSession, verifySession } from '../session'
+import { verifySession } from '../session'
 
 // Step 2 of the identifier-first flow: the user submits their password. The
 // identifier rides the signed identify-session cookie from /auth/identify, so
 // it is never re-sent by the client. Verification runs server-side via
 // ADMIN_USER_PASSWORD_AUTH (the browser never touches Cognito), and on success
-// we establish an "AS session" -- proof that this browser is authenticated at
-// the auth component.
+// the vendor-neutral tokens are returned to the caller.
 //
-// Delivery of the resulting Cognito tokens to a consuming app (the BFF handoff)
-// lands in a later increment; for now a successful password sign-in just
-// establishes the AS session and nothing consumes it yet.
+// TRANSITIONAL: tokens are returned in the response body so the same-origin SPA
+// keeps its current sessionStorage + Bearer flow while it migrates off the
+// direct /idp proxy. Moving to httpOnly-cookie session delivery (and an admin
+// authorizer that reads the cookie) is a separately-sequenced step -- see
+// doc/vendor-neutral-auth.md. This is no worse than today: the SPA already
+// holds Cognito tokens in sessionStorage.
 
-export const AS_SESSION_TTL_SECONDS = 3600
+export interface AuthTokens {
+  accessToken: string
+  idToken: string
+  refreshToken: string
+  expiresAt: number
+}
 
 export interface PasswordParams {
   identifySession: string | undefined
@@ -30,7 +37,7 @@ export interface PasswordParams {
 }
 
 export type PasswordResult =
-  | { status: 'authenticated'; asSession: string; username: string }
+  | { status: 'authenticated'; tokens: AuthTokens; username: string }
   | { status: 'challenge'; challengeName: string; challengeSession: string | undefined }
 
 export async function password(params: PasswordParams): Promise<PasswordResult> {
@@ -69,13 +76,21 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
     }
   }
 
-  const asSession = await signSession(
-    { username, typ: 'as' },
-    signingKey,
-    AS_SESSION_TTL_SECONDS,
-    now,
-  )
-  return { status: 'authenticated', asSession, username }
+  const result = response.AuthenticationResult
+  if (!result?.AccessToken || !result.IdToken || !result.RefreshToken) {
+    throw new AuthFailedError('Authentication did not return the expected tokens.')
+  }
+  const nowMs = now ?? Date.now()
+  return {
+    status: 'authenticated',
+    username,
+    tokens: {
+      accessToken: result.AccessToken,
+      idToken: result.IdToken,
+      refreshToken: result.RefreshToken,
+      expiresAt: nowMs + (result.ExpiresIn ?? 3600) * 1000,
+    },
+  }
 }
 
 export class InvalidSessionError extends Error {}
