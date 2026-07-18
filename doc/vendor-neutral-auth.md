@@ -265,16 +265,18 @@ app deliberately, unaffected by how the app itself authenticates).
 
 1. ✅ **Done.** Landed the auth Lambda + `/api/v1/auth` routes (`identify`,
    `password`) **alongside** the existing `/api/v1/idp` proxy.
-2. ✅ **Login path done.** The SPA's **sign-in** now uses the two-step
-   identifier-first flow (`SignInFlow` → `/auth/identify` then `/auth/password`);
-   the direct-to-Cognito `signIn` is gone. **Transitional:** `/auth/password`
-   returns the tokens in the response body so the SPA keeps its current
-   `sessionStorage` + Bearer flow (no worse than today — the httpOnly-cookie +
-   cookie-authorizer switch is step 4). **Still on `/idp`:** signup / confirm /
-   resend / forgot / reset — migrate those next (needs the matching
-   `/api/v1/auth` endpoints) before step 3.
-3. Once the SPA no longer calls `/api/v1/idp` **at all**, delete the IDP proxy
-   behavior, its CloudFront function, and the custom origin.
+2. ✅ **Done.** The whole SPA is on `/api/v1/auth`: sign-in via the two-step
+   identifier-first flow (`SignInFlow` → `/auth/identify` then `/auth/password`),
+   and signup / confirm / resend / forgot / reset via their `/auth/*` endpoints.
+   No SPA code speaks Cognito (`X-Amz-Target`) any more. **Transitional:**
+   `/auth/password` returns the tokens in the response body so the SPA keeps its
+   current `sessionStorage` + Bearer flow (no worse than today — the
+   httpOnly-cookie + cookie-authorizer switch is step 4).
+3. ✅ **Done.** The SPA no longer calls `/api/v1/idp` at all, so the IDP proxy
+   behavior, its CloudFront function (`idp_proxy_rewrite`), the Cognito-IDP
+   custom origin, and the SPA's dead Cognito-shaped helpers
+   (`buildInitiateAuthBody`/`parseAuthResult`) are removed. The `auth_site`
+   client keeps only `ADMIN_USER_PASSWORD_AUTH` + refresh.
 4. Add the **Layer-1 BFF handoff** (`/authorize` + `/token` + one-time-code
    table + RP client registry) and move the **admin API authorizer to read the
    AS session cookie**; prove it with a stub BFF RP in the e2e suite.

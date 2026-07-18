@@ -25,28 +25,31 @@ source into the module — see [Build and release](#build-and-release).
 Everything a user or admin touches is served from **one CloudFront
 distribution** at `auth.<zone>` (prefix configurable via `domain_prefix`).
 There is deliberately no Cognito Hosted UI — the module owns its own login and
-admin experience and calls Cognito's regional IDP API as a same-origin proxy
-instead.
+admin experience. The SPA speaks only a **first-party API**; a bundled **auth
+Lambda** owns all Cognito interaction, so the browser never talks to Cognito
+directly (the vendor-neutral migration in
+[`doc/vendor-neutral-auth.md`](./vendor-neutral-auth.md) retired the old
+direct-to-Cognito `/api/v1/idp` proxy).
 
-All API traffic is namespaced under `/api/v1`. The IDP proxy and the admin
-API share that prefix; `/api/v1/idp*` is a higher-precedence behavior than
-`/api/v1/*`, so IDP requests never fall through to the admin API.
+All API traffic is namespaced under `/api/v1`. The auth API and the admin API
+share that prefix; `/api/v1/auth*` is a higher-precedence behavior than
+`/api/v1/*`, so auth requests never fall through to the admin API.
 
 ```text
                          auth.<zone>  (CloudFront: aws_cloudfront_distribution.auth_site)
                                  │
         ┌────────────────────────┼────────────────────────────────────┐
-        │ default behavior       │ /api/v1/idp*             │ /api/v1/*
+        │ default behavior       │ /api/v1/auth*            │ /api/v1/*
         │ (S3 origin, OAC)       │ (custom origin)          │ (custom origin)
         ▼                        ▼                          ▼
-   S3: the SPA build       cognito-idp.<region>        aws/http_api
-   - /            login    .amazonaws.com              (JWT authorizer →
-   - /admin       panel    (Cognito IDP API)            this pool)
+   S3: the SPA build       aws/http_api               aws/http_api
+   - /            login    (public: the auth          (JWT authorizer →
+   - /admin       panel     Lambda owns Cognito)       this pool)
                                                              │
-   spa_viewer_request      idp_proxy_rewrite           admin_api_rewrite
-   CF function:            CF function:                 CF function:
-   route extensionless     strip /api/v1/idp,          strip /api/v1
-   paths to the right      re-set X-Amz-Target*        prefix
+   spa_viewer_request      auth_api_rewrite           admin_api_rewrite
+   CF function:            CF function:                CF function:
+   route extensionless     strip /api/v1              strip /api/v1
+   paths to the right      prefix                     prefix
    index.html
 ```
 
@@ -56,22 +59,20 @@ API share that prefix; `/api/v1/idp*` is a higher-precedence behavior than
   rewrites extensionless paths to the correct `index.html` (`/admin*` →
   `/admin/index.html`, everything else → `/index.html`) so client-side routing
   works. TTL is normal for static assets.
-- **`/api/v1/idp*` → Cognito IDP API.** The SPA calls Cognito's JSON-RPC IDP
-  API (`InitiateAuth`, `SignUp`, `ConfirmSignUp`, `ForgotPassword`, …)
-  same-origin through CloudFront, so there is no CORS and no hosted redirect.
-  TTL 0, never cached. `*` A CloudFront Function strips the `/api/v1/idp`
-  prefix and re-sets the `X-Amz-Target` header — CloudFront's origin-header
-  allowlist rejects any `X-Amz-*` header name at config time, so the header
-  the IDP API routes on is reapplied inside the function, which is not subject
-  to that restriction. (When the frontend is made vendor-neutral — see the
-  migration plan in [`doc/vendor-neutral-auth.md`](./vendor-neutral-auth.md) —
-  this IDP proxy is replaced by a first-party auth API under `/api/v1/auth`.)
+- **`/api/v1/auth*` → auth API.** The first-party, **public** login +
+  self-service backend: identifier-first `identify`/`password`, plus
+  `signup`/`confirm`/`resend`/`forgot`/`reset`. Built via the shared
+  `aws/http_api` module (no JWT authorizer — this is how a token is obtained).
+  The auth Lambda owns all Cognito interaction (`AdminInitiateAuth`, `SignUp`,
+  `ConfirmSignUp`, `ForgotPassword`, …); the browser exchanges only plain
+  first-party JSON. Same-origin, TTL 0, cookies forwarded (the in-flight
+  identify session). A CloudFront Function strips the `/api/v1` prefix.
 - **`/api/v1/*` → admin API.** The bundled admin HTTP API (built via the
   shared `aws/http_api` module, protected by a JWT authorizer pointed at this
   pool). Pure REST routes (`GET /users`, `PATCH /users/{userId}/enabled`,
-  `PUT /users/{userId}/role`, …). Same-origin, TTL 0. Only provisioned when
-  `create_admin_panel = true` (the default). A CloudFront Function strips the
-  `/api/v1` prefix.
+  `PUT /users/{userId}/roles/{roleId}`, …). Same-origin, TTL 0. Only
+  provisioned when `create_admin_panel = true` (the default). A CloudFront
+  Function strips the `/api/v1` prefix.
 
 The SPA's built assets are **not** managed by Terraform. `terraform apply`
 creates the bucket and a placeholder `index.html`; a deploy step
@@ -83,13 +84,15 @@ into the SPA, never config.
 
 ## Authentication model
 
-The SPA talks to Cognito's IDP API directly using the `USER_PASSWORD_AUTH`
-flow (a first-pass choice; SRP is a documented future option). The `auth_site`
-app client has OAuth/hosted-UI flows disabled — it is used only for these
-direct API calls. Tokens are held in `sessionStorage` and shared between the
-`/` and `/admin` pages; the admin page redirects to `/` if no valid session is
-present (it never renders its own login form). Session hardening beyond this
-`sessionStorage` baseline (refresh rotation, httpOnly cookies) is deferred.
+The SPA speaks only the first-party `/api/v1/auth` API. Sign-in is
+identifier-first (`identify` then `password`); the auth Lambda verifies the
+password server-side via `ADMIN_USER_PASSWORD_AUTH` and returns tokens. The
+`auth_site` app client has OAuth/hosted-UI flows disabled. Tokens are held in
+`sessionStorage` (a transitional step) and shared between the `/` and `/admin`
+pages; the admin page redirects to `/` if no valid session is present (it never
+renders its own login form). Moving to httpOnly-cookie sessions — with an admin
+API authorizer that reads the cookie instead of a Bearer header — is the next
+planned step (see [`doc/vendor-neutral-auth.md`](./vendor-neutral-auth.md)).
 
 Email verification uses **codes, not links** (`CONFIRM_WITH_CODE`). Link-based
 verification points at a Cognito Hosted UI domain, which this design
