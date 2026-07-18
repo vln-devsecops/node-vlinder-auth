@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
   SignInFlow,
   SignUpForm,
@@ -9,11 +9,11 @@ import {
 } from '@vln-devsecops/auth-ui'
 import type { CognitoTokens } from './authConfig'
 import { saveTokens } from './session'
-import { loadConfig, type SiteConfig } from './config'
 
 type Page = 'signin' | 'signup' | 'forgot' | 'verify'
 
-const IDP_URL = '/api/v1/idp'
+// The SPA speaks only this first-party surface -- no ClientId, no X-Amz-Target,
+// no Cognito envelopes. The backend (auth Lambda) owns all Cognito interaction.
 const AUTH_URL = '/api/v1/auth'
 
 async function authErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -21,12 +21,31 @@ async function authErrorMessage(response: Response, fallback: string): Promise<s
   return body.error ?? `${fallback}: ${response.status}`
 }
 
+/** POST a JSON payload to an /api/v1/auth endpoint; throw its error message on failure. */
+async function postAuth(
+  path: string,
+  payload: Record<string, unknown>,
+  fallback: string,
+): Promise<void> {
+  const response = await fetch(`${AUTH_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    throw new Error(await authErrorMessage(response, fallback))
+  }
+}
+
 /**
  * Vendor-neutral, identifier-first sign-in. Step 1: resolve the identifier to
  * how it authenticates (the backend does home-realm discovery). The SPA never
  * speaks to the identity provider directly -- see doc/vendor-neutral-auth.md.
  */
-async function identify(identifier: string): Promise<{ method: 'password' | 'redirect'; location?: string }> {
+async function identify(
+  identifier: string,
+): Promise<{ method: 'password' | 'redirect'; location?: string }> {
   const response = await fetch(`${AUTH_URL}/identify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -54,130 +73,28 @@ async function submitPassword(password: string): Promise<CognitoTokens> {
   return body.tokens
 }
 
-async function signUp(
-  clientId: string,
-  email: string,
-  password: string,
-  givenName: string,
-  familyName: string,
-): Promise<void> {
-  const response = await fetch(IDP_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.SignUp',
-    },
-    body: JSON.stringify({
-      ClientId: clientId,
-      Username: email,
-      Password: password,
-      // given_name/family_name are required attributes in cognito_auth's
-      // user pool schema (doxchange-derived) -- SignUp is rejected without
-      // them.
-      UserAttributes: [
-        { Name: 'given_name', Value: givenName },
-        { Name: 'family_name', Value: familyName },
-      ],
-    }),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string }
-    throw new Error(body.message ?? `Sign-up failed: ${response.status}`)
-  }
-}
+const signUp = (values: {
+  email: string
+  password: string
+  givenName: string
+  familyName: string
+}) => postAuth('/signup', values, 'Sign-up failed')
 
-async function confirmSignUp(clientId: string, email: string, code: string): Promise<void> {
-  const response = await fetch(IDP_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.ConfirmSignUp',
-    },
-    body: JSON.stringify({ ClientId: clientId, Username: email, ConfirmationCode: code }),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string }
-    throw new Error(body.message ?? `Verification failed: ${response.status}`)
-  }
-}
+const confirmSignUp = (email: string, code: string) =>
+  postAuth('/confirm', { email, code }, 'Verification failed')
 
-async function resendConfirmationCode(clientId: string, email: string): Promise<void> {
-  const response = await fetch(IDP_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.ResendConfirmationCode',
-    },
-    body: JSON.stringify({ ClientId: clientId, Username: email }),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string }
-    throw new Error(body.message ?? `Resend failed: ${response.status}`)
-  }
-}
+const resendConfirmationCode = (email: string) => postAuth('/resend', { email }, 'Resend failed')
 
-async function requestForgotPassword(clientId: string, email: string): Promise<void> {
-  const response = await fetch(IDP_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.ForgotPassword',
-    },
-    body: JSON.stringify({ ClientId: clientId, Username: email }),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string }
-    throw new Error(body.message ?? `Request failed: ${response.status}`)
-  }
-}
+const requestForgotPassword = (email: string) => postAuth('/forgot', { email }, 'Request failed')
 
-async function confirmForgotPassword(
-  clientId: string,
-  email: string,
-  code: string,
-  newPassword: string,
-): Promise<void> {
-  const response = await fetch(IDP_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-amz-json-1.1',
-      'X-Amz-Target': 'AWSCognitoIdentityProviderService.ConfirmForgotPassword',
-    },
-    body: JSON.stringify({
-      ClientId: clientId,
-      Username: email,
-      ConfirmationCode: code,
-      Password: newPassword,
-    }),
-  })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { message?: string }
-    throw new Error(body.message ?? `Reset failed: ${response.status}`)
-  }
-}
+const confirmForgotPassword = (values: { email: string; code: string; newPassword: string }) =>
+  postAuth('/reset', values, 'Reset failed')
 
 function App() {
   const [page, setPage] = useState<Page>('signin')
-  const [config, setConfig] = useState<SiteConfig | null>(null)
-  const [configError, setConfigError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [pendingEmail, setPendingEmail] = useState('')
-
-  useEffect(() => {
-    loadConfig()
-      .then(setConfig)
-      .catch((e: unknown) => {
-        setConfigError(e instanceof Error ? e.message : 'Failed to load config')
-      })
-  }, [])
-
-  if (configError) {
-    return <p role="alert">{configError}</p>
-  }
-  if (!config) {
-    return <p>Loading…</p>
-  }
 
   const handleIdentify = (identifier: string) => {
     setError(null)
@@ -199,13 +116,7 @@ function App() {
   }) => {
     setError(null)
     try {
-      await signUp(
-        config.userPoolClientId,
-        values.email,
-        values.password,
-        values.givenName,
-        values.familyName,
-      )
+      await signUp(values)
       setPendingEmail(values.email)
       setPage('verify')
     } catch (e: unknown) {
@@ -216,7 +127,7 @@ function App() {
   const handleConfirmSignUp = async (code: string) => {
     setError(null)
     try {
-      await confirmSignUp(config.userPoolClientId, pendingEmail, code)
+      await confirmSignUp(pendingEmail, code)
       setNotice('Email verified. You can sign in now.')
       setPage('signin')
     } catch (e: unknown) {
@@ -228,21 +139,20 @@ function App() {
     setError(null)
     setPendingEmail(email)
     try {
-      await requestForgotPassword(config.userPoolClientId, email)
+      await requestForgotPassword(email)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Request failed')
     }
   }
 
-  const handleConfirmReset = async (values: { email: string; code: string; newPassword: string }) => {
+  const handleConfirmReset = async (values: {
+    email: string
+    code: string
+    newPassword: string
+  }) => {
     setError(null)
     try {
-      await confirmForgotPassword(
-        config.userPoolClientId,
-        values.email,
-        values.code,
-        values.newPassword,
-      )
+      await confirmForgotPassword(values)
       setPage('signin')
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Reset failed')
@@ -271,10 +181,7 @@ function App() {
 
       {page === 'forgot' && (
         <>
-          <ForgotPasswordForm
-            onRequestCode={handleRequestCode}
-            onConfirmReset={handleConfirmReset}
-          />
+          <ForgotPasswordForm onRequestCode={handleRequestCode} onConfirmReset={handleConfirmReset} />
           <button onClick={() => { setError(null); setPage('signin') }}>Back to sign in</button>
         </>
       )}
@@ -283,7 +190,7 @@ function App() {
         <>
           <VerifyEmailNotice
             email={pendingEmail}
-            onResend={() => resendConfirmationCode(config.userPoolClientId, pendingEmail)}
+            onResend={() => resendConfirmationCode(pendingEmail)}
           />
           <ConfirmSignUpForm onConfirm={handleConfirmSignUp} />
         </>
