@@ -25,7 +25,7 @@ function validate(
   if (!email.trim()) {
     return 'Email is required.'
   }
-  // given_name/family_name are required attributes in cognito_auth's user
+  // given_name/family_name are required attributes in vlinder_auth's user
   // pool schema (doxchange-derived contract) -- Cognito rejects a SignUp
   // without them, so catch it client-side with a friendlier message.
   if (!givenName.trim()) {
