@@ -27,9 +27,7 @@ distribution** at `auth.<zone>` (prefix configurable via `domain_prefix`).
 There is deliberately no Cognito Hosted UI — the module owns its own login and
 admin experience. The SPA speaks only a **first-party API**; a bundled **auth
 Lambda** owns all Cognito interaction, so the browser never talks to Cognito
-directly (the vendor-neutral migration in
-[`doc/vendor-neutral-auth.md`](./vendor-neutral-auth.md) retired the old
-direct-to-Cognito `/api/v1/idp` proxy).
+directly.
 
 All API traffic is namespaced under `/api/v1`. The auth API and the admin API
 share that prefix; `/api/v1/auth*` is a higher-precedence behavior than
