@@ -3,9 +3,11 @@ export interface SiteConfig {
   multiTenant: boolean
 }
 
-/** Fetch /config.json at page load — this is where Terraform outputs land
- *  at deploy time (written by deploy.sh). Falls back gracefully so local
- *  dev with a missing config.json shows a clear error rather than crashing. */
+/** Fetch /config.json at page load — this is where per-deployment Terraform
+ *  outputs land (the vlinder_auth module writes config.json into the S3 origin
+ *  itself, via a local_file resource, at apply time). Falls back gracefully so
+ *  local dev with a missing config.json shows a clear error rather than
+ *  crashing. */
 export async function loadConfig(): Promise<SiteConfig> {
   const response = await fetch('/config.json')
   if (!response.ok) {

@@ -74,12 +74,16 @@ share that prefix; `/api/v1/auth*` is a higher-precedence behavior than
   provisioned when `create_admin_panel = true` (the default). A CloudFront
   Function strips the `/api/v1` prefix.
 
-The SPA's built assets are **not** managed by Terraform. `terraform apply`
-creates the bucket and a placeholder `index.html`; a deploy step
-(`packages/auth-site/scripts/deploy.sh`) builds the SPA, writes a runtime
-`config.json` (the Cognito app-client id and a multi-tenant flag — the only
-values that vary per deployment), and `aws s3 sync`s it to the bucket. The
-`/api/v1` prefix and its sub-paths are fixed infrastructure constants baked
+The SPA's built assets **are** managed by Terraform, so `terraform apply` alone
+yields a working site — the complete solution is a single deployable template.
+The prebuilt bundle is published to GitHub Packages as `@vln-devsecops/auth-site`
+(by `.github/workflows/cd_publish_auth_site.yml`, the same delivery mechanism as
+the auth Lambda) and consumed by the `vlinder_auth` module, which installs it at
+apply time, writes the runtime `config.json` (the Cognito app-client id and a
+multi-tenant flag — the only values that vary per deployment) with a `local_file`
+resource, and `aws s3 sync`s it to the bucket, invalidating CloudFront. SPA
+version bumps flow through Dependabot on the module's `site-build/package.json`.
+The `/api/v1` prefix and its sub-paths are fixed infrastructure constants baked
 into the SPA, never config.
 
 ## Authentication model

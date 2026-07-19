@@ -1,0 +1,107 @@
+---
+name: Publish auth-site to GitHub Packages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - packages/auth-site/**
+      # auth-ui is bundled into the auth-site build, so rebuild/republish when
+      # it changes too.
+      - packages/ui-auth/**
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and assemble auth-site package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute version with build number
+        id: version
+        run: echo "VERSION=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: npm run build --workspace packages/auth-site
+
+      - name: Assemble publishable package
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+
+          # The published artifact is just the built static bundle -- fully
+          # self-contained (Vite bundles auth-ui, react, etc. into dist/), so
+          # the publish manifest declares no dependencies. That keeps a
+          # standalone `npm install @vln-devsecops/auth-site` in the Terraform
+          # module from trying to resolve the unpublished @vln-devsecops/auth-ui
+          # workspace package. config.json is intentionally absent: Terraform
+          # writes it per deployment.
+          rm -rf publish
+          mkdir -p publish
+          cp -R packages/auth-site/dist publish/dist
+          cat > publish/package.json <<JSON
+          {
+            "name": "@vln-devsecops/auth-site",
+            "version": "${VERSION}",
+            "description": "Prebuilt auth-site SPA static assets for the vlinder_auth Terraform module.",
+            "license": "MIT",
+            "files": [
+              "dist/"
+            ],
+            "publishConfig": {
+              "registry": "https://npm.pkg.github.com",
+              "access": "public"
+            }
+          }
+          JSON
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: auth-site-package
+          path: publish/
+
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: auth-site-package
+          path: ./package
+
+      - name: Configure npm authentication
+        working-directory: ./package
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to GitHub Packages
+        working-directory: ./package
+        run: npm publish --registry=https://npm.pkg.github.com/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
