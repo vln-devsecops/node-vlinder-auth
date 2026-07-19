@@ -9,12 +9,12 @@ import type { AuthWorld } from './world'
 // browser launch + navigation + Cognito API round trip.
 setDefaultTimeout(60 * 1000)
 
-// Real run diagnosis: scenarios that happen to run first (right after
-// run.sh's deploy.sh just finished) consistently time out on the sign-in
+// Real run diagnosis: scenarios that happen to run first (right after a fresh
+// `terraform apply` deployed the SPA) consistently time out on the sign-in
 // redirect; scenarios running later in the same suite pass with the exact
-// same code path. That's a CloudFront-propagation-after-deploy symptom,
-// not a code bug -- deploy.sh's `aws s3 sync` completing doesn't mean the
-// distribution is actually serving the new content at every edge location
+// same code path. That's a CloudFront-propagation-after-deploy symptom, not a
+// code bug -- the module's `aws s3 sync` + invalidation completing doesn't mean
+// the distribution is actually serving the new content at every edge location
 // yet. Poll the site once, before any scenario, so the whole suite doesn't
 // pay for this in flaky per-scenario timeouts.
 BeforeAll({ timeout: 120 * 1000 }, async () => {
