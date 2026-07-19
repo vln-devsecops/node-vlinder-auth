@@ -20,7 +20,7 @@ export interface RenderUserTableOptions {
 /**
  * Renders the user table directly with DOM APIs -- no framework, matching
  * the "fairly light" bundled admin panel this package builds for
- * cognito_auth. Replaces container's contents each call.
+ * vlinder_auth. Replaces container's contents each call.
  */
 export function renderUserTable(
   container: HTMLElement,

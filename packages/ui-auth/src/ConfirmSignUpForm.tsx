@@ -9,7 +9,7 @@ export interface ConfirmSignUpFormProps {
 /**
  * Code-entry form completing a code-based signup confirmation (the pool
  * uses CONFIRM_WITH_CODE -- link-based confirmation needs a Cognito hosted
- * domain, which cognito_auth deliberately doesn't create). The consuming
+ * domain, which vlinder_auth deliberately doesn't create). The consuming
  * app calls ConfirmSignUp in onConfirm.
  */
 export function ConfirmSignUpForm(props: ConfirmSignUpFormProps) {

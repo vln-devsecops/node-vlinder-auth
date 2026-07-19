@@ -26,7 +26,7 @@ export async function signUp(params: SignUpParams): Promise<void> {
         ClientId: params.clientId,
         Username: params.email,
         Password: params.password,
-        // given_name/family_name are required attributes in cognito_auth's
+        // given_name/family_name are required attributes in vlinder_auth's
         // (doxchange-derived) pool schema -- SignUp is rejected without them.
         UserAttributes: [
           { Name: 'given_name', Value: params.givenName },

@@ -35,7 +35,7 @@ export interface AdminApiClient {
   revokeRole: (userId: string, roleId: string) => Promise<void>
 }
 
-/** Thin fetch wrapper over cognito_auth's bundled admin API. No framework, no build step beyond Vite. */
+/** Thin fetch wrapper over vlinder_auth's bundled admin API. No framework, no build step beyond Vite. */
 export function createAdminApiClient(config: AdminApiClientConfig): AdminApiClient {
   async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Auth rides the HttpOnly session cookie (same-origin) -- the admin API's

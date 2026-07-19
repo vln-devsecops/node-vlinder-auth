@@ -12,12 +12,12 @@ The system spans three repos in the `vln-devsecops` GitHub org:
 
 | Repo | Role |
 | --- | --- |
-| `terraform-modules` | `modules/aws/cognito_auth` — the self-provisioning module. All AWS infrastructure. |
+| `terraform-modules` | `modules/aws/vlinder_auth` — the self-provisioning module. All AWS infrastructure. |
 | `node-vlinder-auth` | The application code the module deploys: Lambda triggers, the admin API, the auth-site SPA, and a reusable React component library. This repo. |
 | `infra` | Org-level plumbing: the delegated test zone, and the IAM role CI assumes to run the module's live test suite. Not part of a consumer's deployment. |
 
 `node-vlinder-auth` is the authoring project (TDD, real TypeScript) for code
-that must ultimately run inside `cognito_auth`. It is **not** vendored as
+that must ultimately run inside `vlinder_auth`. It is **not** vendored as
 source into the module — see [Build and release](#build-and-release).
 
 ## Runtime topology
@@ -173,7 +173,7 @@ node-vlinder-auth/packages/lambda-src
    └─ esbuild → one self-contained CJS bundle per handler
    └─ published to GitHub Packages as @vln-devsecops/auth-lambda  (cd_publish_lambda_src.yml)
 
-terraform-modules/modules/aws/cognito_auth/lambda-build/package.json
+terraform-modules/modules/aws/vlinder_auth/lambda-build/package.json
    └─ depends on @vln-devsecops/auth-lambda            (bumped by Dependabot)
    └─ at apply time: null_resource runs `npm install`,
       archive_file zips node_modules/.../dist per handler
@@ -194,12 +194,12 @@ consuming app can import into its *own* frontend.
 
 Three layers, each catching what the layer below structurally cannot:
 
-- **Contract tests** (`modules/aws/cognito_auth/tests/*.tftest.hcl`,
+- **Contract tests** (`modules/aws/vlinder_auth/tests/*.tftest.hcl`,
   `mock_provider`) — plan-time assertions on module wiring: resource shapes,
   IAM policy contents, RBAC seeding, conditional resources. Fast, no AWS.
 - **Node unit tests** (Vitest, TDD throughout) — the handler and SPA logic in
   `node-vlinder-auth`.
-- **Live integration suite** (`tests/aws/cognito_auth/run.sh`, run in CI via
+- **Live integration suite** (`tests/aws/vlinder_auth/run.sh`, run in CI via
   `ct_terraform_integration.yml`) — a real, ephemeral `terraform apply` into
   AWS, followed by the **BDD e2e suite** (`node-vlinder-auth/e2e`,
   Cucumber + Playwright) driving real browser flows against the deployed auth

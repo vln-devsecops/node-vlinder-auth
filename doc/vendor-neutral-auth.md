@@ -236,7 +236,7 @@ participant: it starts login by redirecting to `/authorize`, handles the
 httpOnly session cookie on the app's origin. Documenting that integration
 (config: `client_id`, `redirect_uri`, `client_secret`) is part of this work.
 
-**`terraform-modules/modules/aws/cognito_auth`** —
+**`terraform-modules/modules/aws/vlinder_auth`** —
 
 - Add the auth Lambda + its `aws/http_api` routes under `/api/v1/auth`
   (public, no authorizer).
