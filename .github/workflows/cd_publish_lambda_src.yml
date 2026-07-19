@@ -15,6 +15,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
+  # don't cancel to avoid partial applies
   cancel-in-progress: false
 
 jobs:
