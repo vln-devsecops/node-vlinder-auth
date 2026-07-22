@@ -19,5 +19,9 @@
     "globals": "^17.7.0",
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.24.1"
+  },
+  "allowScripts": {
+    "@swc/core@1.15.43": true,
+    "esbuild@0.28.1": true
   }
 }
