@@ -1,13 +1,17 @@
 Feature: Admin — manage a user's roles
   As an admin
-  I want to grant and revoke roles on a user
+  I want to list the role catalog, grant a role to a user, and revoke a role
   So that I can adjust what a user is entitled to do
 
-  # First-version scope. A user may hold several roles within their (single, v1)
-  # tenant; granting adds a role rather than replacing the set, and revoking
-  # removes one role while leaving the others intact. Role and privilege are
-  # kept separate: only a role's resolved privileges ever reach a token, never
-  # the role name.
+  # First-version scope. The concrete role-management actions an admin can take:
+  #   List the role catalog      GET    /roles                         admin:roles:read
+  #   Grant a role to a user     PUT    /users/{userId}/roles/{roleId} admin:users:write
+  #   Revoke a role from a user  DELETE /users/{userId}/roles/{roleId} admin:users:write
+  #
+  # A user may hold several roles within their (single, v1) tenant; granting
+  # adds a role rather than replacing the set, and revoking removes one role
+  # while leaving the others intact. Role and privilege are kept separate: only
+  # a role's resolved privileges ever reach a token, never the role name.
   #
   # A newly granted role defaults to "elevated" activation: it is held for a
   # future sudo step-up and does NOT widen the user's everyday login privileges.

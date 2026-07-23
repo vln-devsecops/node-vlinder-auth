@@ -25,6 +25,24 @@ definitions, a real browser, and real Cognito/DynamoDB — live in
 | `admin/role-management.feature` | Admin | List the role catalog, grant/revoke roles, elevated-by-default grant, idempotency |
 | `admin/access-scope.feature` | Admin | `own` vs `*` tenant-scope enforcement, ungated reference data, missing-privilege refusal |
 
+### Admin actions (v1)
+
+The complete set of actions an admin can take in the first version, and the
+privilege family each is gated on. Every use case above exercises one or more
+of these, and `access-scope.feature` asserts the scope check on each:
+
+| Action | Route | Privilege family |
+| --- | --- | --- |
+| List users in scope | `GET /users` | `admin:users:read` |
+| View a single user | `GET /users/{userId}` | `admin:users:read` |
+| Enable or disable a user | `PATCH /users/{userId}/enabled` | `admin:users:write` |
+| Grant a role to a user | `PUT /users/{userId}/roles/{roleId}` | `admin:users:write` |
+| Revoke a role from a user | `DELETE /users/{userId}/roles/{roleId}` | `admin:users:write` |
+| List the role catalog | `GET /roles` | `admin:roles:read` (ungated by tenant) |
+
+A grant carries an activation (`elevated` by default — held for a future sudo
+step-up — or `default` for a login-active role); see `role-management.feature`.
+
 ## What "first version" means here
 
 Scope follows the migration state recorded in
