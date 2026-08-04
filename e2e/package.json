@@ -15,7 +15,7 @@
   },
   "devDependencies": {
     "@cucumber/cucumber": "^13.2.0",
-    "@playwright/test": "^1.49.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.15.23",
     "playwright": "^1.62.0",
     "typescript": "~5.7.2",
