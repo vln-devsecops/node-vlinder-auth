@@ -8,7 +8,7 @@ function demoCredentials(): { email: string; password: string } {
   const password = process.env['DEMO_USER_PASSWORD']
   if (!email || !password) {
     throw new Error(
-      'DEMO_USER_EMAIL and DEMO_USER_PASSWORD must be set (from the demo stack outputs) to run the demo smoke test',
+      'DEMO_USER_EMAIL and DEMO_USER_PASSWORD must be set (from the demo stack outputs). Note: the e2e harness also requires E2E_BASE_URL, E2E_USER_POOL_ID, and AWS_REGION/AWS_DEFAULT_REGION.',
     )
   }
   return { email, password }
