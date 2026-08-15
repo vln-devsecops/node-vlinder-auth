@@ -1,5 +1,6 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
+import { getSessionSigningKey } from '../shared/session-signing-key'
 import { identify, InvalidIdentifierError } from './handlers/identify'
 import { AuthFailedError, InvalidSessionError, password } from './handlers/password'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
@@ -39,7 +40,7 @@ function json(
 export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
-  const signingKey = requireEnv('SESSION_SIGNING_KEY')
+  const signingKey = await getSessionSigningKey(requireEnv('SESSION_SIGNING_KEY_SECRET_ID'))
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 
   try {
