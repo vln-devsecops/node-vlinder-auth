@@ -14,14 +14,14 @@
   "dependencies": {
     "@vln-devsecops/auth-ui": "*",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.2.0",
     "@testing-library/user-event": "^14.6.3",
     "@types/react": "^19.0.10",
-    "@types/react-dom": "^19.0.4",
+    "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react-swc": "^4.3.3",
     "@vitest/coverage-v8": "^4.1.10",
     "jsdom": "^30.0.0",
