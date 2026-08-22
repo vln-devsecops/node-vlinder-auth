@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEventV2WithJWTAuthorizer } from 'aws-lambda'
+import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const listUsersMock = vi.fn()
@@ -30,8 +30,8 @@ const baseEnv = {
 }
 
 function buildEvent(
-  overrides: Partial<APIGatewayProxyEventV2WithJWTAuthorizer>,
-): APIGatewayProxyEventV2WithJWTAuthorizer {
+  overrides: Partial<APIGatewayProxyEventV2WithLambdaAuthorizer<Record<string, string>>>,
+): APIGatewayProxyEventV2WithLambdaAuthorizer<Record<string, string>> {
   return {
     version: '2.0',
     routeKey: 'GET /users',
@@ -40,16 +40,13 @@ function buildEvent(
     headers: {},
     requestContext: {
       authorizer: {
-        jwt: {
-          claims: { tenantId: 'acme-corp', permissions: 'admin:users:read:own' },
-          scopes: [],
-        },
+        lambda: { tenantId: 'acme-corp', permissions: 'admin:users:read:own' },
       },
     },
     pathParameters: {},
     isBase64Encoded: false,
     ...overrides,
-  } as unknown as APIGatewayProxyEventV2WithJWTAuthorizer
+  } as unknown as APIGatewayProxyEventV2WithLambdaAuthorizer<Record<string, string>>
 }
 
 beforeEach(() => {
