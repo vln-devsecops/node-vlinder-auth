@@ -22,7 +22,7 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.1101.0",
     "@aws-sdk/client-dynamodb": "^3.1100.0",
     "@aws-sdk/lib-dynamodb": "^3.1089.0",
-    "jose": "^6.2.4"
+    "jose": "^6.2.9"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.146",
