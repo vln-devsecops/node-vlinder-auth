@@ -1,0 +1,8 @@
+# AWS Lambda custom triggers (Cognito PostConfirmation, etc.) are required
+# by the platform contract to always return the (possibly-augmented) event
+# object - there's no alternate return value to give. SonarQube's generic
+# "always returns the same value" heuristic doesn't know about that
+# contract and flags it as dead branching.
+ignore:
+  - rule: "typescript:S3516"
+    paths: ["packages/lambda-src/src/post-confirmation/handler.ts"]
