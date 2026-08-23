@@ -59,6 +59,14 @@ update this doc (tick its checkboxes, append a dated entry to the Progress
 Log below, bump "Current step"), and stop for review rather than chaining
 into the next step unannounced.
 
+**Always check CI findings on the PR before calling a step done** — passing
+tests locally isn't the same as a clean pipeline. PR #69 (the post-review
+doc fixes) shipped clean locally but failed `markdownlint` and SonarQube in
+CI purely because of files vendored into the repo for this plan
+(`design_handoff_auth_chrome/`'s own README and `.dc.html` mockups) — a
+class of failure that's invisible until you actually look at `gh pr checks`
+/ the SonarQube annotations.
+
 ## Steps
 
 ### Step 0 — This doc
@@ -268,7 +276,10 @@ changes that depend on the same "resolve a secret" capability.
 
 - [ ] Once this step and Step 8 both land, delete `design_handoff_auth_chrome/`
       from the repo root — it's a temporary staging copy, not meant to live
-      here long-term.
+      here long-term. Also revert the markdownlint exclusion added for it in
+      `.github/workflows/ci_lint_markdown.yml` and remove its entry from
+      `.sastignore` (both added solely to keep CI green against this vendored
+      bundle's own `.dc.html` mockups and README formatting).
 
 - [ ] Verify: `npm run test --workspace=packages/ui-auth`.
 

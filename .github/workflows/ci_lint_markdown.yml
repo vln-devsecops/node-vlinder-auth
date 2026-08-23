@@ -24,4 +24,7 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@v24.2.0
         with:
           config: .markdownlint.json
-          globs: '**/*.md'
+          globs: |
+            **/*.md
+            !design_handoff_auth_chrome/**
+
