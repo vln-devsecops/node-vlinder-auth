@@ -4,6 +4,11 @@ import { loadSession, isSessionExpired } from './session'
 import { loadConfig } from './config'
 import { filterUsers, renderUserTable } from './userTable'
 
+function renderAdminDisabled(): void {
+  const app = document.getElementById('app')!
+  app.innerHTML = '<p role="alert">The admin panel is not enabled for this deployment.</p>'
+}
+
 async function main(): Promise<void> {
   // The token itself is an HttpOnly cookie the SPA can't read; this marker only
   // tells us whether to bother rendering or bounce to the login page. The
@@ -15,6 +20,12 @@ async function main(): Promise<void> {
   }
 
   const config = await loadConfig()
+  // auth_api profile: this SPA is deployed for its login page, but there's no
+  // admin API for this page to call. Bail out before touching apiClient.
+  if (!config.adminEnabled) {
+    renderAdminDisabled()
+    return
+  }
   const multiTenant = isMultiTenant(config.multiTenant)
 
   const apiClient = createAdminApiClient({ baseUrl: '/api/v1' })

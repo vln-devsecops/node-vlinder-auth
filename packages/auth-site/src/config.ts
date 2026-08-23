@@ -1,6 +1,7 @@
 export interface SiteConfig {
   userPoolClientId: string
   multiTenant: boolean
+  adminEnabled: boolean
 }
 
 /** Fetch /config.json at page load — this is where per-deployment Terraform
@@ -17,5 +18,8 @@ export async function loadConfig(): Promise<SiteConfig> {
   return {
     userPoolClientId: data['userPoolClientId'] as string,
     multiTenant: Boolean(data['multiTenant']),
+    // Missing field (older config.json) defaults to true, matching this
+    // module's pre-profile behavior of always bundling the admin API.
+    adminEnabled: data['adminEnabled'] === undefined ? true : Boolean(data['adminEnabled']),
   }
 }

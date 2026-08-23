@@ -13,7 +13,21 @@ afterEach(() => {
 })
 
 function jsonResponse(body: unknown, ok = true, status = 200) {
-  return { ok, status, json: () => Promise.resolve(body) }
+  return {
+    ok,
+    status,
+    headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null) },
+    json: () => Promise.resolve(body),
+  }
+}
+
+function htmlResponse(status = 200) {
+  return {
+    ok: status < 400,
+    status,
+    headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) },
+    json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+  }
 }
 
 describe('createAdminApiClient', () => {
@@ -92,5 +106,14 @@ describe('createAdminApiClient', () => {
     const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
 
     await expect(client.listUsers()).rejects.toThrow('nope')
+  })
+
+  it('throws a clear error instead of an unhandled SyntaxError when the response is not JSON', async () => {
+    // e.g. the admin API isn't deployed for this site (auth_api profile) and
+    // the request falls through CloudFront to the SPA's own index.html.
+    fetchMock.mockResolvedValue(htmlResponse())
+    const client = createAdminApiClient({ baseUrl: 'https://admin-api.example.com' })
+
+    await expect(client.listUsers()).rejects.toThrow(/expected a JSON response/i)
   })
 })
