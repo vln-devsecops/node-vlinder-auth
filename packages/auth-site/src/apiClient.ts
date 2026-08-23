@@ -46,7 +46,25 @@ export function createAdminApiClient(config: AdminApiClientConfig): AdminApiClie
       credentials: 'same-origin',
     })
 
-    const body = response.status === 204 ? undefined : await response.json()
+    if (response.status === 204) {
+      if (!response.ok) {
+        throw new Error(`Request to ${path} failed with status ${response.status}`)
+      }
+      return undefined as T
+    }
+
+    // A missing route (e.g. the admin API isn't deployed for this site, per
+    // the auth_api profile) falls through CloudFront to the SPA's own
+    // index.html with a 200 -- catch that here instead of letting
+    // response.json() throw an opaque SyntaxError.
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.includes('application/json')) {
+      throw new Error(
+        `Request to ${path} failed with status ${response.status}: expected a JSON response, got "${contentType || 'no content-type'}"`,
+      )
+    }
+
+    const body = await response.json()
 
     if (!response.ok) {
       const message =

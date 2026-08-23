@@ -11,13 +11,37 @@ describe('loadConfig', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false }),
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false, adminEnabled: true }),
       }),
     )
 
     const config = await loadConfig()
 
-    expect(config).toEqual({ userPoolClientId: 'abc123', multiTenant: false })
+    expect(config).toEqual({ userPoolClientId: 'abc123', multiTenant: false, adminEnabled: true })
+  })
+
+  it('defaults adminEnabled to true when the field is absent (older config.json)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false }),
+      }),
+    )
+
+    expect((await loadConfig()).adminEnabled).toBe(true)
+  })
+
+  it('respects an explicit adminEnabled: false (auth_api profile)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false, adminEnabled: false }),
+      }),
+    )
+
+    expect((await loadConfig()).adminEnabled).toBe(false)
   })
 
   it('coerces truthy multiTenant to boolean true', async () => {

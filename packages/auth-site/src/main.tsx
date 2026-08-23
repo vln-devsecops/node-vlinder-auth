@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   SignInFlow,
   SignUpForm,
@@ -8,6 +8,7 @@ import {
   ConfirmSignUpForm,
 } from '@vln-devsecops/auth-ui'
 import { saveSession } from './session'
+import { loadConfig } from './config'
 
 type Page = 'signin' | 'signup' | 'forgot' | 'verify'
 
@@ -97,6 +98,16 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [pendingEmail, setPendingEmail] = useState('')
+  // Defaults true (pre-profile behavior) so a not-yet-resolved config never
+  // blocks the redirect a user expects; loadConfig() resolves long before a
+  // real login submission completes.
+  const [adminEnabled, setAdminEnabled] = useState(true)
+
+  useEffect(() => {
+    loadConfig()
+      .then((config) => setAdminEnabled(config.adminEnabled))
+      .catch(() => undefined)
+  }, [])
 
   const handleIdentify = (identifier: string) => {
     setError(null)
@@ -107,7 +118,11 @@ function App() {
     setError(null)
     const session = await submitPassword(password)
     saveSession(session)
-    window.location.href = '/admin'
+    if (adminEnabled) {
+      window.location.href = '/admin'
+    } else {
+      setNotice('Signed in.')
+    }
   }
 
   const handleSignUp = async (values: {
