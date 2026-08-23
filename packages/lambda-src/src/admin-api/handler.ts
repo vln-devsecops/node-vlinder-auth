@@ -1,5 +1,5 @@
 import type {
-  APIGatewayProxyEventV2WithJWTAuthorizer,
+  APIGatewayProxyEventV2WithLambdaAuthorizer,
   APIGatewayProxyStructuredResultV2,
 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
@@ -31,11 +31,14 @@ function jsonResponse(statusCode: number, body?: unknown): APIGatewayProxyStruct
 /**
  * Single Lambda behind the admin API's http_api module call, routing on
  * routeKey. Each route delegates to a handler in ./handlers, which performs
- * its own tenant-scope check independent of the JWT authorizer that already
- * validated the token.
+ * its own tenant-scope check independent of the Lambda authorizer that
+ * already validated the token (see node-http-api-authorizer) -- that
+ * authorizer verifies the JWT itself and forwards tenantId/permissions/scope
+ * into its context, the same claims a native JWT authorizer would have
+ * exposed.
  */
 export async function handler(
-  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  event: APIGatewayProxyEventV2WithLambdaAuthorizer<Record<string, string | undefined>>,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const ddbDocClient = getDdbDocClient()
   const cognitoClient = getCognitoClient()
@@ -43,11 +46,7 @@ export async function handler(
   const rolesTableName = requireEnv('ROLES_TABLE_NAME')
   const userPoolId = requireEnv('USER_POOL_ID')
 
-  // Our own claims (tenantId, permissions) are always strings; the aws-lambda
-  // types model the general JWT-claims case more broadly than that.
-  const caller = extractCallerContext(
-    event.requestContext.authorizer.jwt.claims as Record<string, string | undefined>,
-  )
+  const caller = extractCallerContext(event.requestContext.authorizer.lambda)
   const targetUserId = event.pathParameters?.userId
   const targetRoleId = event.pathParameters?.roleId
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
