@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/colors.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/typography.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/spacing.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/effects.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/styles.css">
+<script src="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/_ds_bundle.js"></script>
+<script type="text/babel" src="./ios-frame.jsx"></script>
+<style>
+a{color:var(--text-link);text-decoration:none}
+a:hover{color:var(--text-link-hover);text-decoration:underline}
+</style>
+</helmet>
+
+<div style="{{ pageStyle }}">
+
+  <div style="display:flex;flexDirection:column;alignItems:center;gap:32px" data-screen-label="Mobile mockup" id="sec-mobile">
+    <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);textAlign:center">Mobile mockup</span>
+    <div style="display:flex;flexWrap:wrap;gap:40px;justifyContent:center">
+
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" width="{{ 375 }}" height="{{ 812 }}" dark="{{ true }}" hint-size="375px,812px">
+        <div style="height:100%;display:flex;flexDirection:column;fontFamily:var(--font-sans)">
+          <div style="paddingTop:52px;display:flex;alignItems:center;gap:8px;padding:52px 20px 16px;background:var(--brand-primary);color:var(--text-inverse);flexShrink:0">
+            <sc-if value="{{ useCircleLogo }}" hint-placeholder-val="{{ false }}">
+              <div style="height:22px;width:22px;borderRadius:50%;background:rgba(255,255,255,0.9);flexShrink:0"></div>
+            </sc-if>
+            <sc-if value="{{ !useCircleLogo }}" hint-placeholder-val="{{ true }}">
+              <img src="assets/logo-transparent.svg" alt="" style="height:22px;width:22px;filter:brightness(0) invert(1)"></img>
+            </sc-if>
+            <span style="fontSize:14px;fontWeight:600">{{ productName }}</span>
+          </div>
+          <div style="flex:1;overflow:auto;padding:28px 20px;boxSizing:border-box;display:flex;flexDirection:column;justifyContent:center;gap:16px;background:var(--surface-page)">
+            <div style="display:flex;flexDirection:column;gap:4px">
+              <h1 style="fontSize:22px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Log in</h1>
+              <p style="fontSize:13px;color:var(--text-secondary);margin:0">Enter your details to access your account.</p>
+            </div>
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,68px" label="Email" type="email" placeholder="you@company.com"></x-import>
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,68px" label="Password" type="password" placeholder="Enter your password"></x-import>
+            <div style="display:flex;alignItems:center;justifyContent:space-between">
+              <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Checkbox" hint-size="auto,24px" label="Remember me"></x-import>
+              <a href="#sec-forgot" style="fontSize:13px">Forgot?</a>
+            </div>
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,46px" variant="primary" size="lg" style="width:100%">Log in</x-import>
+            <div style="display:flex;alignItems:center;gap:10px">
+              <div style="flex:1;height:1px;background:var(--border-subtle)"></div>
+              <span style="fontSize:11px;color:var(--text-tertiary)">or</span>
+              <div style="flex:1;height:1px;background:var(--border-subtle)"></div>
+            </div>
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,46px" variant="secondary" size="lg" style="width:100%">
+              <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Icon" hint-size="18px,18px" name="google" size="18"></x-import>
+              <span>Continue with Google</span>
+            </x-import>
+            <p style="fontSize:13px;color:var(--text-secondary);textAlign:center;margin:0">No account? <a href="#sec-signup">Sign up</a></p>
+          </div>
+        </div>
+      </x-import>
+
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" width="{{ 375 }}" height="{{ 812 }}" dark="{{ true }}" hint-size="375px,812px">
+        <div style="height:100%;display:flex;flexDirection:column;fontFamily:var(--font-sans)">
+          <div style="display:flex;alignItems:center;gap:8px;padding:52px 20px 16px;background:var(--brand-primary);color:var(--text-inverse);flexShrink:0">
+            <sc-if value="{{ useCircleLogo }}" hint-placeholder-val="{{ false }}">
+              <div style="height:22px;width:22px;borderRadius:50%;background:rgba(255,255,255,0.9);flexShrink:0"></div>
+            </sc-if>
+            <sc-if value="{{ !useCircleLogo }}" hint-placeholder-val="{{ true }}">
+              <img src="assets/logo-transparent.svg" alt="" style="height:22px;width:22px;filter:brightness(0) invert(1)"></img>
+            </sc-if>
+            <span style="fontSize:14px;fontWeight:600">{{ productName }}</span>
+          </div>
+          <div style="flex:1;overflow:auto;padding:28px 20px;boxSizing:border-box;display:flex;flexDirection:column;justifyContent:center;gap:20px;alignItems:center;textAlign:center;background:var(--surface-page)">
+            <div style="display:flex;flexDirection:column;gap:4px">
+              <h1 style="fontSize:22px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Verify your email</h1>
+              <p style="fontSize:13px;color:var(--text-secondary);margin:0">We sent a 6-digit code to jane@company.com.</p>
+            </div>
+            <div style="display:flex;gap:6px;justifyContent:center">
+              <input type="text" maxlength="1" inputmode="numeric" style="width:38px;height:46px;fontSize:18px;fontFamily:var(--font-mono);fontWeight:600;textAlign:center;border:1px solid var(--border-default);borderRadius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;boxSizing:border-box"></input>
+              <input type="text" maxlength="1" inputmode="numeric" style="width:38px;height:46px;fontSize:18px;fontFamily:var(--font-mono);fontWeight:600;textAlign:center;border:1px solid var(--border-default);borderRadius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;boxSizing:border-box"></input>
+              <input type="text" maxlength="1" inputmode="numeric" style="width:38px;height:46px;fontSize:18px;fontFamily:var(--font-mono);fontWeight:600;textAlign:center;border:1px solid var(--border-default);borderRadius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;boxSizing:border-box"></input>
+              <input type="text" maxlength="1" inputmode="numeric" style="width:38px;height:46px;fontSize:18px;fontFamily:var(--font-mono);fontWeight:600;textAlign:center;border:1px solid var(--border-default);borderRadius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;boxSizing:border-box"></input>
+              <input type="text" maxlength="1" inputmode="numeric" style="width:38px;height:46px;fontSize:18px;fontFamily:var(--font-mono);fontWeight:600;textAlign:center;border:1px solid var(--border-default);borderRadius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;boxSizing:border-box"></input>
+              <input type="text" maxlength="1" inputmode="numeric" style="width:38px;height:46px;fontSize:18px;fontFamily:var(--font-mono);fontWeight:600;textAlign:center;border:1px solid var(--border-default);borderRadius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;boxSizing:border-box"></input>
+            </div>
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,46px" variant="primary" size="lg" style="width:100%">Verify</x-import>
+            <p style="fontSize:13px;color:var(--text-secondary);margin:0">Didn't get a code? <a href="#sec-verify">Resend</a></p>
+          </div>
+        </div>
+      </x-import>
+
+    </div>
+  </div>
+
+  <div style="display:flex;flexDirection:column;alignItems:center" data-screen-label="Log in" id="sec-login">
+    <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);marginBottom:16px;textAlign:center">01 · Log in</span>
+    <div style="{{ cardOuterStyle }}">
+      <dc-import name="AuthBrandPanel" product-name="{{ productName }}" tagline="{{ tagline }}" use-circle-logo="{{ useCircleLogo }}" hint-size="380px,600px" style="{{ panelMountStyle }}"></dc-import>
+      <div style="{{ formWrapStyle }}">
+        <div style="width:100%;maxWidth:360px;display:flex;flexDirection:column;gap:24px">
+          <div style="display:flex;flexDirection:column;gap:8px">
+            <h1 style="fontSize:28px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Log in</h1>
+            <p style="fontSize:14px;color:var(--text-secondary);lineHeight:var(--leading-normal);margin:0">Enter your details to access your account.</p>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Email" type="email" placeholder="you@company.com"></x-import>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Password" type="password" placeholder="Enter your password"></x-import>
+          <div style="display:flex;alignItems:center;justifyContent:space-between">
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Checkbox" hint-size="auto,24px" label="Remember me"></x-import>
+            <a href="#sec-forgot" style="fontSize:14px">Forgot password?</a>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="primary" size="lg" style="width:100%">Log in</x-import>
+          <div style="display:flex;alignItems:center;gap:12px">
+            <div style="flex:1;height:1px;background:var(--border-subtle)"></div>
+            <span style="fontSize:12px;color:var(--text-tertiary)">or</span>
+            <div style="flex:1;height:1px;background:var(--border-subtle)"></div>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="secondary" size="lg" style="width:100%">
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Icon" hint-size="18px,18px" name="google" size="18"></x-import>
+            <span>Continue with Google</span>
+          </x-import>
+          <p style="fontSize:14px;color:var(--text-secondary);textAlign:center;margin:0">Don't have an account? <a href="#sec-signup">Sign up</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <sc-if value="{{ showErrorDemo }}" hint-placeholder-val="{{ true }}">
+    <div style="display:flex;flexDirection:column;alignItems:center" data-screen-label="Log in — error state" id="sec-login-error">
+      <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);marginBottom:16px;textAlign:center">Log in · error state</span>
+      <div style="width:440px;maxWidth:100%;background:var(--surface-card);border:1px solid var(--border-subtle);borderRadius:var(--radius-lg);boxShadow:var(--shadow-md);padding:40px;display:flex;flexDirection:column;gap:20px;boxSizing:border-box">
+        <div style="display:flex;alignItems:flex-start;gap:10px;background:var(--status-critical-bg);color:var(--red-600);padding:12px 16px;borderRadius:var(--radius-md);fontSize:13px;lineHeight:var(--leading-normal)">
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Icon" hint-size="16px,16px" name="exclamation-triangle-fill" size="16" color="var(--status-critical)"></x-import>
+          <span>Account locked. Too many failed attempts — try again in 15 minutes or reset your password.</span>
+        </div>
+        <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Email" type="email" placeholder="jane@company.com"></x-import>
+        <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,90px" label="Password" type="password" placeholder="Enter your password" error="Incorrect password."></x-import>
+        <div style="display:flex;alignItems:center;justifyContent:space-between">
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Checkbox" hint-size="auto,24px" label="Remember me"></x-import>
+          <a href="#sec-forgot" style="fontSize:14px">Forgot password?</a>
+        </div>
+        <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="primary" size="lg" style="width:100%">Log in</x-import>
+      </div>
+    </div>
+  </sc-if>
+
+  <div style="display:flex;flexDirection:column;alignItems:center" data-screen-label="Sign up" id="sec-signup">
+    <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);marginBottom:16px;textAlign:center">02 · Sign up</span>
+    <div style="{{ cardOuterStyle }}">
+      <dc-import name="AuthBrandPanel" product-name="{{ productName }}" tagline="{{ tagline }}" use-circle-logo="{{ useCircleLogo }}" hint-size="380px,600px" style="{{ panelMountStyle }}"></dc-import>
+      <div style="{{ formWrapStyle }}">
+        <div style="width:100%;maxWidth:360px;display:flex;flexDirection:column;gap:24px">
+          <div style="display:flex;flexDirection:column;gap:8px">
+            <h1 style="fontSize:28px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Create your account</h1>
+            <p style="fontSize:14px;color:var(--text-secondary);lineHeight:var(--leading-normal);margin:0">Start securing your systems in minutes.</p>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Full name" type="text" placeholder="Jane Cooper"></x-import>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Work email" type="email" placeholder="jane@company.com"></x-import>
+          <div style="display:flex;flexDirection:column;gap:6px">
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,68px" label="Password" type="password" placeholder="Create a password"></x-import>
+            <span style="fontSize:12px;color:var(--text-tertiary)">Use 8+ characters with a mix of letters, numbers and symbols.</span>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Checkbox" hint-size="auto,24px" label="I agree to the Terms of Service and Privacy Policy"></x-import>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="primary" size="lg" style="width:100%">Create account</x-import>
+          <div style="display:flex;alignItems:center;gap:12px">
+            <div style="flex:1;height:1px;background:var(--border-subtle)"></div>
+            <span style="fontSize:12px;color:var(--text-tertiary)">or</span>
+            <div style="flex:1;height:1px;background:var(--border-subtle)"></div>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="secondary" size="lg" style="width:100%">
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Icon" hint-size="18px,18px" name="google" size="18"></x-import>
+            <span>Continue with Google</span>
+          </x-import>
+          <p style="fontSize:14px;color:var(--text-secondary);textAlign:center;margin:0">Already have an account? <a href="#sec-login">Log in</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;flexDirection:column;alignItems:center" data-screen-label="Forgot password" id="sec-forgot">
+    <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);marginBottom:16px;textAlign:center">03 · Forgot password</span>
+    <div style="{{ cardOuterStyle }}">
+      <dc-import name="AuthBrandPanel" product-name="{{ productName }}" tagline="{{ tagline }}" use-circle-logo="{{ useCircleLogo }}" hint-size="380px,600px" style="{{ panelMountStyle }}"></dc-import>
+      <div style="{{ formWrapStyle }}">
+        <div style="width:100%;maxWidth:360px;display:flex;flexDirection:column;gap:24px">
+          <div style="display:flex;flexDirection:column;gap:8px">
+            <h1 style="fontSize:28px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Reset your password</h1>
+            <p style="fontSize:14px;color:var(--text-secondary);lineHeight:var(--leading-normal);margin:0">Enter the email associated with your account and we'll send a reset link.</p>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Email" type="email" placeholder="you@company.com"></x-import>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="primary" size="lg" style="width:100%">Send reset link</x-import>
+          <div style="display:flex;justifyContent:center">
+            <a href="#sec-login" style="display:inline-flex;alignItems:center;gap:6px;fontSize:14px">
+              <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Icon" hint-size="14px,14px" name="arrow-left" size="14"></x-import>
+              <span>Back to log in</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;flexDirection:column;alignItems:center" data-screen-label="Reset password" id="sec-reset">
+    <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);marginBottom:16px;textAlign:center">04 · Reset password</span>
+    <div style="{{ cardOuterStyle }}">
+      <dc-import name="AuthBrandPanel" product-name="{{ productName }}" tagline="{{ tagline }}" use-circle-logo="{{ useCircleLogo }}" hint-size="380px,600px" style="{{ panelMountStyle }}"></dc-import>
+      <div style="{{ formWrapStyle }}">
+        <div style="width:100%;maxWidth:360px;display:flex;flexDirection:column;gap:24px">
+          <div style="display:flex;flexDirection:column;gap:8px">
+            <h1 style="fontSize:28px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Set a new password</h1>
+            <p style="fontSize:14px;color:var(--text-secondary);lineHeight:var(--leading-normal);margin:0">Choose a new password for your account.</p>
+          </div>
+          <div style="display:flex;flexDirection:column;gap:6px">
+            <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,68px" label="New password" type="password" placeholder="Enter a new password"></x-import>
+            <span style="fontSize:12px;color:var(--text-tertiary)">Use 8+ characters with a mix of letters, numbers and symbols.</span>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Input" hint-size="100%,74px" label="Confirm password" type="password" placeholder="Confirm your password"></x-import>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="primary" size="lg" style="width:100%">Reset password</x-import>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;flexDirection:column;alignItems:center" data-screen-label="Verify email" id="sec-verify">
+    <span style="fontSize:12px;fontWeight:600;letterSpacing:0.08em;textTransform:uppercase;color:var(--text-tertiary);marginBottom:16px;textAlign:center">05 · Verify email</span>
+    <div style="{{ cardOuterStyle }}">
+      <dc-import name="AuthBrandPanel" product-name="{{ productName }}" tagline="{{ tagline }}" use-circle-logo="{{ useCircleLogo }}" hint-size="380px,600px" style="{{ panelMountStyle }}"></dc-import>
+      <div style="{{ formWrapStyle }}">
+        <div style="width:100%;maxWidth:360px;display:flex;flexDirection:column;gap:24px;alignItems:center;textAlign:center">
+          <div style="display:flex;flexDirection:column;gap:8px">
+            <h1 style="fontSize:28px;fontWeight:700;letterSpacing:var(--tracking-tight);margin:0;color:var(--text-primary)">Verify your email</h1>
+            <p style="fontSize:14px;color:var(--text-secondary);lineHeight:var(--leading-normal);margin:0">We sent a 6-digit code to jane@company.com. Enter it below to continue.</p>
+          </div>
+          <div style="{{ codeGapStyle }}">
+            <input type="text" maxlength="1" inputmode="numeric" style="{{ codeInputStyle }}"></input>
+            <input type="text" maxlength="1" inputmode="numeric" style="{{ codeInputStyle }}"></input>
+            <input type="text" maxlength="1" inputmode="numeric" style="{{ codeInputStyle }}"></input>
+            <input type="text" maxlength="1" inputmode="numeric" style="{{ codeInputStyle }}"></input>
+            <input type="text" maxlength="1" inputmode="numeric" style="{{ codeInputStyle }}"></input>
+            <input type="text" maxlength="1" inputmode="numeric" style="{{ codeInputStyle }}"></input>
+          </div>
+          <x-import component-from-global-scope="VlinderSoftwareDesignSystem_63de7f.Button" hint-size="100%,48px" variant="primary" size="lg" style="width:100%">Verify</x-import>
+          <p style="fontSize:14px;color:var(--text-secondary);margin:0">Didn't get a code? <a href="#sec-verify">Resend</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1400,&quot;height&quot;:1600},&quot;profile&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;vlinder&quot;,&quot;options&quot;:[&quot;vlinder&quot;,&quot;default&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Content&quot;},&quot;productName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Vlinder Software&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Content&quot;},&quot;tagline&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Security built into every layer of your IIoT stack.&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Content&quot;},&quot;showErrorDemo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Content&quot;}}">
+class Component extends DCLogic {
+  state = { isMobile: false };
+  componentDidMount() {
+    this.onResize = () => this.setState({ isMobile: window.innerWidth < 720 });
+    window.addEventListener('resize', this.onResize);
+    this.onResize();
+  }
+  componentWillUnmount() {
+    window.removeEventListener('resize', this.onResize);
+  }
+  renderVals() {
+    const isMobile = this.state.isMobile;
+    const profile = this.props.profile ?? 'vlinder';
+    const isDefault = profile === 'default';
+    const themeVars = isDefault
+      ? '--brand-primary:oklch(52% 0.14 148);--brand-primary-hover:oklch(44% 0.14 148);--text-link:oklch(45% 0.14 148);--text-link-hover:oklch(38% 0.14 148);--focus-ring:oklch(52% 0.14 148);'
+      : '';
+    return {
+      productName: this.props.productName ?? (isDefault ? 'Your Company Name' : 'Vlinder Software'),
+      tagline: this.props.tagline ?? (isDefault ? 'Your Tagline Here' : 'Security built into every layer of your IIoT stack.'),
+      useCircleLogo: isDefault,
+      showErrorDemo: this.props.showErrorDemo ?? true,
+      pageStyle: `${themeVars}background:var(--surface-page);min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:${isMobile ? 56 : 96}px;padding:${isMobile ? '48px 16px' : '96px 24px'};box-sizing:border-box;font-family:var(--font-sans)`,
+      cardOuterStyle: `display:flex;align-items:stretch;border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-lg);border:1px solid var(--border-subtle);background:var(--surface-card);width:100%;max-width:${isMobile ? '420px' : '960px'};flex-direction:${isMobile ? 'column' : 'row'}`,
+      panelMountStyle: isMobile ? 'width:100%;flex-shrink:0' : 'width:380px;flex-shrink:0',
+      formWrapStyle: `flex:1;display:flex;align-items:center;justify-content:center;padding:${isMobile ? '40px 24px' : '64px'};box-sizing:border-box;min-width:0`,
+      codeInputStyle: `width:${isMobile ? 40 : 48}px;height:${isMobile ? 48 : 56}px;font-size:20px;font-family:var(--font-mono);font-weight:600;text-align:center;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-primary);outline:none;box-sizing:border-box`,
+      codeGapStyle: `display:flex;gap:${isMobile ? 8 : 10}px;justify-content:center`
+    };
+  }
+}
+</script>
+</body>
+</html>

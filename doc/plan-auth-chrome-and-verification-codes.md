@@ -74,6 +74,10 @@ the ARN to a value anywhere in the codebase. A real deployment would fail on
 its first auth request. Small and isolated; land it alone before the bigger
 changes that depend on the same "resolve a secret" capability.
 
+- [ ] Add `@aws-sdk/client-secrets-manager` to `packages/lambda-src/package.json`
+      dependencies — not currently installed (only the Cognito/DynamoDB
+      clients + `jose` are).
+
 - [ ] Add `packages/lambda-src/src/shared/secrets.ts`: `getSecret(secretId)`
       via `@aws-sdk/client-secrets-manager`'s `GetSecretValueCommand`, cached
       in a module-level map (populated on cold start, reused across warm
@@ -106,6 +110,9 @@ changes that depend on the same "resolve a secret" capability.
         — atomic attempts-increment (`ConditionExpression` capping at
         `maxAttempts`); deletes the row on success or on exhausting attempts;
         treats an expired row as not-found.
+
+- [ ] Add `@aws-sdk/client-sesv2` to `packages/lambda-src/package.json`
+      dependencies — not currently installed.
 
 - [ ] New `shared/email.ts`: `sendVerificationCode(...)` via
       `SESv2Client`/`SendEmailCommand` (DI'd `sesClient`).
@@ -171,6 +178,12 @@ changes that depend on the same "resolve a secret" capability.
 - [ ] TDD first: `pre-sign-up/handler.test.ts` asserts both fields are always
       set true.
 
+- [ ] Add an entry point to `packages/lambda-src/esbuild.config.mjs`'s
+      `handlers` array (`{ in: 'src/pre-sign-up/handler.ts', out:
+      'dist/pre-sign-up/handler' }`) — the array is hardcoded to today's 4
+      handlers; without this the new handler never lands in `dist/` and
+      Terraform's `archive_file` silently zips a package without it.
+
 ### Step 5 — Terraform wiring (`terraform-modules/modules/aws/vlinder_auth`)
 
 - [ ] New `pre_sign_up` Lambda resource + `lambda_config.pre_sign_up` wiring,
@@ -178,15 +191,30 @@ changes that depend on the same "resolve a secret" capability.
       blocks (IAM role, log group, packaging via the shared
       `data.archive_file.lambda_package`).
 
+- [ ] `terraform-modules/modules/aws/dynamodb` has **no TTL support today**
+      (checked `main.tf` — no `ttl` block on `aws_dynamodb_table`, no
+      TTL-related variable). Add an optional `ttl_attribute` variable to the
+      shared submodule (default `null`, emitting a `ttl { attribute_name =
+      var.ttl_attribute, enabled = true }` block only when set) before the
+      next bullet — this is a cross-cutting change to code every other table
+      composing this submodule also uses, not part of `vlinder_auth` itself.
+
 - [ ] New DynamoDB table `verification_codes`, composed via the same
-      `aws/dynamodb` submodule already used for `module.user_role_assignments`.
-      Key: `email` (partition) + `purpose` (sort). TTL on `expiresAt`.
+      `aws/dynamodb` submodule already used for `module.user_role_assignments`
+      (now with `ttl_attribute = "expiresAt"` from the bullet above). Key:
+      `email` (partition) + `purpose` (sort).
 
 - [ ] `auth_api`'s IAM policy: remove `cognito-idp:ConfirmSignUp`,
       `ResendConfirmationCode`, `ForgotPassword`, `ConfirmForgotPassword`
       (no longer called); add `cognito-idp:AdminSetUserPassword`,
       `cognito-idp:AdminGetUser`, `ses:SendEmail` (scoped to the SES identity
-      ARN), and read/write on the new table.
+      ARN); add `dynamodb:GetItem`, `PutItem`, `UpdateItem`, `DeleteItem` on
+      `module.verification_codes.table_arn`; and — easy to miss, and this
+      exact module has been bitten by it before (`auth_api` currently touches
+      no DynamoDB at all, per the comment on its existing KMS statement) —
+      add `kms:Decrypt`, `kms:GenerateDataKey`, `kms:DescribeKey` on
+      `module.verification_codes.kms_key_arn`, mirroring the identical
+      statement on `pre_token_generation`'s policy.
 
 - [ ] New variables: `verification_code_ttl_seconds` (default 600),
       `verification_code_max_attempts` (default 5).
@@ -229,13 +257,18 @@ changes that depend on the same "resolve a secret" capability.
       a custom inline `AuthProfile` is respected; `themeFromProfile()`
       includes `logoUrl` only for `logo.kind === 'image'`).
 
-- [ ] Copy `AuthChrome.tsx`/`profiles.ts` from the extracted handoff bundle
-      (`design_handoff_auth_chrome/`, from `Auth workflow redesign.zip`) into
-      `packages/ui-auth/src/`, adjusting only if a test reveals a mismatch
-      (none expected — already spot-checked against the real `theme.ts`).
+- [ ] Copy `AuthChrome.tsx`/`profiles.ts` from `design_handoff_auth_chrome/`
+      (checked into repo root for this handoff — see that directory's
+      `README.md`) into `packages/ui-auth/src/`, adjusting only if a test
+      reveals a mismatch (none expected — already spot-checked against the
+      real `theme.ts`).
 
 - [ ] Export both from `packages/ui-auth/src/index.ts` per the handoff's
       README step 2.
+
+- [ ] Once this step and Step 8 both land, delete `design_handoff_auth_chrome/`
+      from the repo root — it's a temporary staging copy, not meant to live
+      here long-term.
 
 - [ ] Verify: `npm run test --workspace=packages/ui-auth`.
 
@@ -260,9 +293,10 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 9 — BDD: `e2e/`
 
-- [ ] `e2e/support/world.ts`: add `getVerificationCode(email, purpose)` (a
-      `GetCommand` against the new table, mirroring `getRoleAssignments`'s
-      existing DDB read pattern).
+- [ ] `e2e/support/world.ts`: add `getVerificationCode(email, purpose)` — a
+      `GetCommand` against the new table (both partition and sort key are
+      known here, unlike `getRoleAssignments`'s `QueryCommand`, which only
+      has the partition key and expects multiple rows back).
 
 - [ ] Update the `"the account is confirmed"` step (`common.steps.ts`/
       `signup.steps.ts`) — it currently admin-bypasses via
@@ -297,9 +331,18 @@ changes that depend on the same "resolve a secret" capability.
 - [ ] `npm run test --workspaces --if-present` from repo root.
 - [ ] `cd e2e && npm test` (dry-run).
 - [ ] Once deployed: real `test:live` run.
-- [ ] Open `reference/Auth Workflow.dc.html` / `reference/AuthBrandPanel.dc.html`
-      in a browser to eyeball `AuthChrome`'s visual fidelity.
+- [ ] Open `design_handoff_auth_chrome/reference/Auth Workflow.dc.html` /
+      `design_handoff_auth_chrome/reference/AuthBrandPanel.dc.html` in a
+      browser to eyeball `AuthChrome`'s visual fidelity — do this before
+      deleting that directory in Step 7/8.
 
 ## Progress Log
 
 - 2026-08-23: Step 0 — plan doc drafted and opened for review.
+- 2026-08-23: Post-review fixes — added missing `package.json` dependency
+  bullets (Steps 1, 2), an `esbuild.config.mjs` entry-point bullet (Step 4), a
+  shared-submodule TTL-support bullet and an explicit KMS-grant bullet (Step
+  5), corrected the `getVerificationCode` "mirrors `getRoleAssignments`"
+  claim (Step 9), and checked `design_handoff_auth_chrome/` into the repo
+  root (from `Auth workflow redesign.zip`) so Steps 7/8/10 have something
+  real to point at — to be deleted once Step 7/8 land.

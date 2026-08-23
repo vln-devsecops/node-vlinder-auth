@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/colors.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/typography.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/spacing.css">
+<link rel="stylesheet" href="_ds/vlinder-software-design-system-63de7fd1-a80a-4170-89ad-b48923af1e4f/tokens/effects.css">
+</helmet>
+<div style="{{ panelStyle }}">
+  <div style="display:flex;alignItems:center;gap:10px;flexShrink:0">
+    <sc-if value="{{ useCircleLogo }}" hint-placeholder-val="{{ false }}">
+      <div style="height:34px;width:34px;borderRadius:50%;background:rgba(255,255,255,0.9);flexShrink:0"></div>
+    </sc-if>
+    <sc-if value="{{ !useCircleLogo }}" hint-placeholder-val="{{ true }}">
+      <img src="assets/logo-transparent.svg" alt="" style="height:34px;width:34px;filter:brightness(0) invert(1)"></img>
+    </sc-if>
+    <span style="fontSize:17px;fontWeight:600;letterSpacing:var(--tracking-tight);whiteSpace:nowrap">{{ productName }}</span>
+  </div>
+  <sc-if value="{{ showTagline }}" hint-placeholder-val="{{ true }}">
+    <div style="maxWidth:320px">
+      <p style="fontSize:26px;fontWeight:600;lineHeight:var(--leading-snug);letterSpacing:var(--tracking-tight);margin:0">{{ tagline }}</p>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:440,&quot;height&quot;:640},&quot;productName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Vlinder Software&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;tagline&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Security built into every layer of your IIoT stack.&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;useCircleLogo&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  state = { isMobile: false };
+  componentDidMount() {
+    this.onResize = () => this.setState({ isMobile: window.innerWidth < 720 });
+    window.addEventListener('resize', this.onResize);
+    this.onResize();
+  }
+  componentWillUnmount() {
+    window.removeEventListener('resize', this.onResize);
+  }
+  renderVals() {
+    const isMobile = this.state.isMobile;
+    return {
+      productName: this.props.productName ?? 'Vlinder Software',
+      tagline: this.props.tagline ?? 'Security built into every layer of your IIoT stack.',
+      useCircleLogo: this.props.useCircleLogo ?? false,
+      showTagline: !isMobile,
+      panelStyle: isMobile
+        ? 'width:100%;height:auto;background:var(--brand-primary);color:var(--text-inverse);display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:12px;padding:20px 28px;box-sizing:border-box;font-family:var(--font-sans)'
+        : 'width:100%;height:100%;background:var(--brand-primary);color:var(--text-inverse);display:flex;flex-direction:column;justify-content:space-between;padding:56px;box-sizing:border-box;font-family:var(--font-sans)'
+    };
+  }
+}
+</script>
+</body>
+</html>
