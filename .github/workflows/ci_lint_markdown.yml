@@ -27,4 +27,3 @@ jobs:
           globs: |
             **/*.md
             !design_handoff_auth_chrome/**
-
