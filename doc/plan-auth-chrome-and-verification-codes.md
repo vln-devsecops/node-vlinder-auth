@@ -1,0 +1,255 @@
+# Plan: app-owned verification codes + AuthChrome handoff
+
+**Current step:** 0 (not yet started)
+
+## Context
+Two bundled efforts, sequenced together because the second's BDD coverage
+depends on the first:
+
+1. **Stop relying on Cognito to generate/send signup and password-reset
+   codes.** Our own `auth-api` lambda already owns the whole `/api/v1/auth/*`
+   surface; it should generate the code itself, store it, send it via SES,
+   and use Cognito's admin API to declare the user verified once the code
+   checks out. Cognito never needs to know the code. This was chosen over
+   alternatives (intercepting Cognito's own email via SES inbound receiving,
+   or trying to read Cognito's internal code via CustomMessage) because:
+   - Cognito's `CustomMessage` trigger only ever receives the `{####}`
+     placeholder, never the real code (confirmed via AWS docs) — no Lambda
+     trigger can observe Cognito's own generated code.
+   - `AdminCreateUser` + `AdminSetUserPassword(Permanent: true)` (the pattern
+     `e2e/support/world.ts`'s `createConfirmedTestUser` already uses for test
+     fixtures) jumps straight to `CONFIRMED` *without* firing
+     `PostConfirmation`, and calling `AdminConfirmSignUp` afterward fails
+     ("already confirmed") — confirmed via AWS docs + a corroborating GitHub
+     issue. Not a viable basis for the real signup flow.
+   - The only way to stop Cognito's own auto-email at signup is the
+     `PreSignUp` trigger's `autoConfirmUser=true` (AWS's own docs have an
+     "auto-confirm and auto-verify all users" example for exactly this). That
+     flag confirms the account **instantly**, so the app must gate login
+     itself until our own code is actually verified — chosen over the
+     alternative (stay `UNCONFIRMED`, call `AdminConfirmSignUp` only once our
+     code checks out) because that alternative still can't suppress Cognito's
+     own auto-email, defeating the point.
+   - Confirmed via the same AWS docs: `PreSignUp`'s `autoConfirmUser`/
+     `autoVerifyEmail` response fields are *ignored* when the trigger fires
+     from `AdminCreateUser` — so existing test fixtures
+     (`createConfirmedTestUser`, used by `signin.feature`/`admin-panel.feature`/
+     `session.feature`) are unaffected by this change.
+2. **Implement Claude Design's `AuthChrome` handoff** (themeable brand-panel
+   chrome around the existing unstyled auth forms), with TDD (Vitest/RTL,
+   matching `packages/ui-auth`'s existing colocated-test convention) and BDD
+   (Cucumber/Playwright, matching `e2e/`'s existing one-file-per-flow
+   convention). Once (1) lands, e2e can drive the **real** happy path for
+   signup-confirmation and password-reset (reading the real code straight out
+   of the new DynamoDB table — same "test setup reaches past the app layer"
+   precedent already used for the role-assignments table), not just
+   negative-path coverage.
+
+## Process
+This doc is the source of truth for progress, not conversation memory —
+sessions implementing this plan may be far apart (new Claude sessions, token
+limits). Each session should pick up **one numbered step**, implement it,
+update this doc (tick its checkboxes, append a dated entry to the Progress
+Log below, bump "Current step"), and stop for review rather than chaining
+into the next step unannounced.
+
+## Steps
+
+### Step 0 — This doc
+- [x] Commit this file, open a PR for review. No code changes.
+
+### Step 1 — Fix the session-signing-key secret-resolution gap
+`packages/lambda-src/src/auth-api/handler.ts` reads
+`process.env.SESSION_SIGNING_KEY` directly, but Terraform only ever sets
+`SESSION_SIGNING_KEY_SECRET_ID` (the Secrets Manager ARN) — nothing resolves
+the ARN to a value anywhere in the codebase. A real deployment would fail on
+its first auth request. Small and isolated; land it alone before the bigger
+changes that depend on the same "resolve a secret" capability.
+- [ ] Add `packages/lambda-src/src/shared/secrets.ts`: `getSecret(secretId)`
+      via `@aws-sdk/client-secrets-manager`'s `GetSecretValueCommand`, cached
+      in a module-level map (populated on cold start, reused across warm
+      invocations — standard Lambda pattern).
+- [ ] TDD first: `shared/secrets.test.ts` (cache hit avoids a second SDK
+      call; propagates SDK errors).
+- [ ] Update `auth-api/handler.ts`: resolve `signingKey` via
+      `getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID'))` instead of
+      `requireEnv('SESSION_SIGNING_KEY')`. Update `handler.test.ts`'s env-var
+      setup accordingly.
+- [ ] No Terraform change needed — `secretsmanager:GetSecretValue` on the
+      right ARN is already granted to `auth_api`'s IAM role.
+
+### Step 2 — Verification-code + email primitives (lambda-src)
+- [ ] New `shared/verificationCodes.ts` (DI'd params, matching
+      `shared/roleAssignments.ts`'s style):
+      - `generateCode()` — 6-digit, `crypto.randomInt`.
+      - `getOrCreateCode(email, purpose, ddbDocClient, tableName, ttlSeconds)`
+        — **idempotent while valid**: if an unexpired row already exists for
+        `(email, purpose)`, return its existing code unchanged (a resend must
+        not invalidate a code the user is mid-typing); only generates+stores
+        a new one when the row is missing or expired.
+      - `verifyCode(email, purpose, submittedCode, ddbDocClient, tableName, maxAttempts)`
+        — atomic attempts-increment (`ConditionExpression` capping at
+        `maxAttempts`); deletes the row on success or on exhausting attempts;
+        treats an expired row as not-found.
+- [ ] New `shared/email.ts`: `sendVerificationCode(...)` via
+      `SESv2Client`/`SendEmailCommand` (DI'd `sesClient`).
+- [ ] TDD first: `shared/verificationCodes.test.ts` covering — code format;
+      `getOrCreateCode` returns the same code on a second call within TTL;
+      returns a new code once expired; `verifyCode` success deletes the row;
+      wrong code increments attempts without deleting; exhausting attempts
+      locks out; expired row treated as not-found.
+- [ ] Storage is **plaintext, not hashed** — deliberate, not an oversight, so
+      e2e can read it directly the same way it already reads the
+      role-assignments table (Step 9). Short-TTL, single-use (deleted on
+      success), attempt-limited, same IAM/network boundary as every other
+      security-sensitive row this app already stores in DynamoDB in
+      plaintext. Flag before Step 5 if this tradeoff doesn't sit right — the
+      alternative (HMAC-hashed) is a small change here but forecloses the
+      real-happy-path e2e coverage in Step 9.
+
+### Step 3 — Wire the primitives into the auth-api handlers
+- [ ] `handlers/registration.ts`: `signUp()` unchanged (still creates the
+      Cognito account via `SignUpCommand` — `PreSignUp`, Step 4, intercepts it
+      to skip Cognito's native verification). Replace `confirmSignUp()` /
+      `resendConfirmation()` — no more `ConfirmSignUpCommand` /
+      `ResendConfirmationCodeCommand`; confirm validates the submitted code
+      against `verification_codes` and deletes the row on success (the user
+      is already Cognito-`CONFIRMED` from the moment of `SignUp`, thanks to
+      auto-confirm); resend calls `getOrCreateCode` + re-sends.
+- [ ] `handlers/recovery.ts`: replace `forgotPassword()` /
+      `confirmForgotPassword()` — no more `ForgotPasswordCommand` /
+      `ConfirmForgotPasswordCommand`. Request step: `AdminGetUser` first
+      (respond identically whether or not the account exists, to avoid
+      leaking which emails are registered — only actually call
+      `getOrCreateCode`+send if it does); confirm step: validate the code,
+      then `AdminSetUserPasswordCommand({ Permanent: true })` directly.
+- [ ] `handlers/password.ts`: **new login gate.** Since `PreSignUp` (Step 4)
+      auto-confirms every account instantly, Cognito's own
+      `UserNotConfirmedException` (today's implicit login-blocker for a
+      never-verified user) will never fire again. Before calling
+      `AdminInitiateAuthCommand`, check for a pending `"signup"`-purpose row
+      in `verification_codes` for the identified user; if one exists, reject
+      with a "please verify your email" error (same shape as the other
+      friendly auth errors here).
+- [ ] Update `handler.ts`'s route glue (`POST /auth/signup` now also
+      triggers the first code send).
+- [ ] TDD first, following `handlers/recovery.test.ts`'s existing
+      `aws-sdk-client-mock` + DI style: rewrite `handlers/registration.test.ts`
+      / `handlers/recovery.test.ts` around the new table-backed logic; add a
+      `handlers/password.test.ts` case for the pending-verification gate.
+
+### Step 4 — New `pre-sign-up` Cognito trigger
+- [ ] `packages/lambda-src/src/pre-sign-up/handler.ts` (mirror
+      `post-confirmation`'s file layout): unconditionally sets
+      `event.response.autoConfirmUser = true` and
+      `event.response.autoVerifyEmail = true`.
+- [ ] TDD first: `pre-sign-up/handler.test.ts` asserts both fields are always
+      set true.
+
+### Step 5 — Terraform wiring (`terraform-modules/modules/aws/vlinder_auth`)
+- [ ] New `pre_sign_up` Lambda resource + `lambda_config.pre_sign_up` wiring,
+      mirroring the existing `post_confirmation`/`pre_token_generation`
+      blocks (IAM role, log group, packaging via the shared
+      `data.archive_file.lambda_package`).
+- [ ] New DynamoDB table `verification_codes`, composed via the same
+      `aws/dynamodb` submodule already used for `module.user_role_assignments`.
+      Key: `email` (partition) + `purpose` (sort). TTL on `expiresAt`.
+- [ ] `auth_api`'s IAM policy: remove `cognito-idp:ConfirmSignUp`,
+      `ResendConfirmationCode`, `ForgotPassword`, `ConfirmForgotPassword`
+      (no longer called); add `cognito-idp:AdminSetUserPassword`,
+      `cognito-idp:AdminGetUser`, `ses:SendEmail` (scoped to the SES identity
+      ARN), and read/write on the new table.
+- [ ] New variables: `verification_code_ttl_seconds` (default 600),
+      `verification_code_max_attempts` (default 5).
+- [ ] `ses_configuration` becomes load-bearing (SES has no zero-config
+      fallback the way `COGNITO_DEFAULT` was) — add a `precondition`
+      requiring it non-null whenever `local.create_public_auth_api` is true,
+      so misconfiguration fails at `plan` time.
+- [ ] Leave `verification_message_template`/Cognito's own `email_configuration`
+      block alone — still backs the separate, currently-unused
+      `attributes_require_verification_before_update` (email-change
+      re-verification) flow.
+- [ ] Verify: `terraform validate` / `plan` against
+      `terraform-modules/tests/aws/vlinder_auth` (once Step 6 wires
+      `ses_configuration` in there).
+
+### Step 6 — Deployment prerequisites (ops, not a code session — owned by the user)
+- [ ] Wire `ses_configuration` into `infra/demo/vlinder_auth`,
+      `terraform-modules/tests/aws/vlinder_auth`, and
+      `terraform-modules/examples/aws/vlinder_auth` by composing the existing
+      `terraform-modules/modules/aws/mail` module (already produces
+      `identity_arn`/`configuration_set_name`) for each environment's domain.
+- [ ] Request SES production access (out of sandbox) for the ephemeral e2e
+      test account/region specifically — it sends to freshly-generated
+      `@example.com` addresses per scenario, which sandbox mode would reject.
+      This is an AWS Support request; Terraform can't do it.
+
+### Step 7 — TDD: `packages/ui-auth` (AuthChrome + profiles)
+- [ ] Write tests first, colocated, matching `SignInFlow.test.tsx`'s style:
+      `profiles.test.ts` (`resolveProfile` for both builtins + a passthrough
+      custom object; `builtinProfiles` has exactly those two keys) and
+      `AuthChrome.test.tsx` (renders `children`/`banner`/`footer`; vlinder
+      profile shows "Vlinder Software" + tagline + an `<img>` logo; `default`
+      profile shows "Your Company Name" + tagline + the circle placeholder;
+      a custom inline `AuthProfile` is respected; `themeFromProfile()`
+      includes `logoUrl` only for `logo.kind === 'image'`).
+- [ ] Copy `AuthChrome.tsx`/`profiles.ts` from the extracted handoff bundle
+      (`design_handoff_auth_chrome/`, from `Auth workflow redesign.zip`) into
+      `packages/ui-auth/src/`, adjusting only if a test reveals a mismatch
+      (none expected — already spot-checked against the real `theme.ts`).
+- [ ] Export both from `packages/ui-auth/src/index.ts` per the handoff's
+      README step 2.
+- [ ] Verify: `npm run test --workspace=packages/ui-auth`.
+
+### Step 8 — Integration: `packages/auth-site`
+- [ ] Rewrite `main.tsx`'s four page branches (`signin`/`signup`/`forgot`/
+      `verify`) to wrap each form in `<AuthChrome profile={vlinderProfile}
+      banner={...} footer={...}>`, passing `theme={themeFromProfile(profile)}`
+      to the wrapped form(s). Preserve all existing handlers unchanged.
+- [ ] Logo asset: fetch `assets/logo-transparent.svg` from the private
+      `VlinderSoftware/design-system` repo (confirmed as the correct
+      transparent/light variant via `guidelines/brand-logo.html`, staged
+      against a dark background there, matching `AuthChrome`'s colored brand
+      panel). Write to
+      `packages/auth-site/public/assets/vlinder-logo-transparent.svg` (no
+      `public/` dir exists yet — Vite serves it at the site root once
+      created).
+- [ ] Leave `theme.ts`'s unrelated `defaultVlinderTheme.logoUrl` (pointing at
+      a separately-missing `/assets/vlinder-logo.svg`) alone.
+
+### Step 9 — BDD: `e2e/`
+- [ ] `e2e/support/world.ts`: add `getVerificationCode(email, purpose)` (a
+      `GetCommand` against the new table, mirroring `getRoleAssignments`'s
+      existing DDB read pattern).
+- [ ] Update the `"the account is confirmed"` step (`common.steps.ts`/
+      `signup.steps.ts`) — it currently admin-bypasses via
+      `AdminConfirmSignUpCommand`, which starts failing once `PreSignUp`
+      auto-confirms every account. Replace with: read the real code via
+      `getVerificationCode(email, 'signup')`, submit it through the real
+      `ConfirmSignUpForm` UI. Replace `signup.feature`'s now-inaccurate
+      `Note:` block (Cognito no longer generates this code at all) with one
+      explaining the table-read precedent.
+- [ ] Brand-panel regression: a new reusable step (e.g. `Then the {string}
+      brand panel is visible`) asserting company-name + tagline text,
+      appended to `signin.feature` and `signup.feature`.
+- [ ] New `e2e/features/forgot-password.feature` + steps: real happy path
+      (request code → read it from the table → submit on the confirm step →
+      new password signs in successfully) plus a wrong-code negative case.
+- [ ] New `e2e/features/verify-email.feature` + steps: real happy path (sign
+      up → read the code → submit via `ConfirmSignUpForm` → login gate
+      lifts) plus wrong-code and resend-shows-status secondary cases.
+- [ ] No change needed to `createConfirmedTestUser`/`session.feature`/
+      `admin-panel.feature` — `PreSignUp`'s auto-confirm fields are ignored
+      when the trigger fires from `AdminCreateUser` (confirmed via AWS docs).
+- [ ] Verify: `cd e2e && npm test` (`cucumber-js --dry-run`) for step
+      resolution; real `test:live` run requires Step 5+6 deployed first.
+
+### Step 10 — Final full-suite verification
+- [ ] `npm run test --workspaces --if-present` from repo root.
+- [ ] `cd e2e && npm test` (dry-run).
+- [ ] Once deployed: real `test:live` run.
+- [ ] Open `reference/Auth Workflow.dc.html` / `reference/AuthBrandPanel.dc.html`
+      in a browser to eyeball `AuthChrome`'s visual fidelity.
+
+## Progress Log
+- 2026-08-23: Step 0 — plan doc drafted and opened for review.
