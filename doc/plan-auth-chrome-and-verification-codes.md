@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 3 (not yet started)
+**Current step:** 4 (not yet started)
 
 ## Context
 
@@ -156,7 +156,7 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 3 — Verification-code + email primitives (lambda-src)
 
-- [ ] New `shared/verificationCodes.ts` (DI'd params, matching
+- [x] New `shared/verificationCodes.ts` (DI'd params, matching
       `shared/roleAssignments.ts`'s style):
 
       - `generateCode()` — 6-digit, `crypto.randomInt`.
@@ -171,19 +171,19 @@ changes that depend on the same "resolve a secret" capability.
         `maxAttempts`); deletes the row on success or on exhausting attempts;
         treats an expired row as not-found.
 
-- [ ] Add `@aws-sdk/client-sesv2` to `packages/lambda-src/package.json`
+- [x] Add `@aws-sdk/client-sesv2` to `packages/lambda-src/package.json`
       dependencies — not currently installed.
 
-- [ ] New `shared/email.ts`: `sendVerificationCode(...)` via
+- [x] New `shared/email.ts`: `sendVerificationCode(...)` via
       `SESv2Client`/`SendEmailCommand` (DI'd `sesClient`).
 
-- [ ] TDD first: `shared/verificationCodes.test.ts` covering — code format;
+- [x] TDD first: `shared/verificationCodes.test.ts` covering — code format;
       `getOrCreateCode` returns the same code on a second call within TTL;
       returns a new code once expired; `verifyCode` success deletes the row;
       wrong code increments attempts without deleting; exhausting attempts
       locks out; expired row treated as not-found.
 
-- [ ] Storage is **plaintext, not hashed** — deliberate, not an oversight, so
+- [x] Storage is **plaintext, not hashed** — deliberate, not an oversight, so
       e2e can read it directly the same way it already reads the
       role-assignments table (Step 10). Short-TTL, single-use (deleted on
       success), attempt-limited, same IAM/network boundary as every other
@@ -455,4 +455,23 @@ changes that depend on the same "resolve a secret" capability.
   resolves `signingKey` via `getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID'))`;
   `handler.test.ts` mocks `SecretsManagerClient` instead of setting
   `SESSION_SIGNING_KEY` directly. No other file in the repo referenced the
-  old env var. Full test suite, lint, and `tsc --noEmit` all pass.
+  old env var. Full test suite, lint, and `tsc --noEmit` all pass. Merged.
+- 2026-08-24: Step 3 — added `shared/verificationCodes.ts` (`generateCode`,
+  `getOrCreateCode`, `verifyCode`) and `shared/email.ts`
+  (`sendVerificationCode`, DI'd `SESv2Client`, purpose-keyed subject/body via
+  a `VerificationPurpose = 'signup' | 'password-reset'` union — Step 4 should
+  reuse that literal union for the purpose values it passes into
+  `verificationCodes.ts` rather than inventing new ones).
+  `verifyCode` does a plain `GetCommand` read first (expired/missing rows
+  return `not-found` before any write), then a conditional `UpdateCommand`
+  (`attempts < :maxAttempts`) for a wrong guess, deleting the row on success
+  or once the condition fails (locked-out) — the atomicity guarantee is on
+  the increment step itself (per the plan's wording), not the full
+  read-then-write sequence; a tiny race between two concurrent wrong guesses
+  right at the attempts cap could let one extra attempt through, judged
+  acceptable for a short-TTL, attempt-limited code. Added a
+  `shared/email.test.ts` alongside it (not explicitly called for in this
+  step's TDD bullet, but keeps `email.ts`'s purpose-branching covered,
+  matching this directory's near-universal colocated-test convention).
+  11 new tests; full suite (132 in lambda-src, up from 121), lint, and
+  `tsc --noEmit` all pass.
