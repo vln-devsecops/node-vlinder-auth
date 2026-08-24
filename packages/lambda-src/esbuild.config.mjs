@@ -15,9 +15,9 @@
 // We write dist/package.json ourselves so the CJS bundles are loaded
 // correctly even though the source package has "type": "module".
 import * as esbuild from 'esbuild'
-import { rmSync, writeFileSync } from 'fs'
-import { fileURLToPath } from 'url'
-import { dirname, resolve } from 'path'
+import { rmSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -36,6 +36,7 @@ const shared = {
 }
 
 const handlers = [
+  { in: 'src/pre-sign-up/handler.ts', out: 'dist/pre-sign-up/handler' },
   { in: 'src/post-confirmation/handler.ts', out: 'dist/post-confirmation/handler' },
   { in: 'src/pre-token-generation/handler.ts', out: 'dist/pre-token-generation/handler' },
   { in: 'src/admin-api/handler.ts', out: 'dist/admin-api/handler' },
