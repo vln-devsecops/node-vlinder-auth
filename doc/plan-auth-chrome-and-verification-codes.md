@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 2 (not yet started)
+**Current step:** 3 (not yet started)
 
 ## Context
 
@@ -134,24 +134,24 @@ the ARN to a value anywhere in the codebase. A real deployment would fail on
 its first auth request. Small and isolated; land it alone before the bigger
 changes that depend on the same "resolve a secret" capability.
 
-- [ ] Add `@aws-sdk/client-secrets-manager` to `packages/lambda-src/package.json`
+- [x] Add `@aws-sdk/client-secrets-manager` to `packages/lambda-src/package.json`
       dependencies — not currently installed (only the Cognito/DynamoDB
       clients + `jose` are).
 
-- [ ] Add `packages/lambda-src/src/shared/secrets.ts`: `getSecret(secretId)`
+- [x] Add `packages/lambda-src/src/shared/secrets.ts`: `getSecret(secretId)`
       via `@aws-sdk/client-secrets-manager`'s `GetSecretValueCommand`, cached
       in a module-level map (populated on cold start, reused across warm
       invocations — standard Lambda pattern).
 
-- [ ] TDD first: `shared/secrets.test.ts` (cache hit avoids a second SDK
+- [x] TDD first: `shared/secrets.test.ts` (cache hit avoids a second SDK
       call; propagates SDK errors).
 
-- [ ] Update `auth-api/handler.ts`: resolve `signingKey` via
+- [x] Update `auth-api/handler.ts`: resolve `signingKey` via
       `getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID'))` instead of
       `requireEnv('SESSION_SIGNING_KEY')`. Update `handler.test.ts`'s env-var
       setup accordingly.
 
-- [ ] No Terraform change needed — `secretsmanager:GetSecretValue` on the
+- [x] No Terraform change needed — `secretsmanager:GetSecretValue` on the
       right ARN is already granted to `auth_api`'s IAM role.
 
 ### Step 3 — Verification-code + email primitives (lambda-src)
@@ -446,4 +446,13 @@ changes that depend on the same "resolve a secret" capability.
   `e2e` dry-run), `npm run lint`, and `tsc --noEmit`/`tsc -b` across
   `ui-auth`, `auth-site`, and `e2e` all pass. Opened as PR #70; CI confirms
   the SonarQube scan dropped from 30 baseline findings to 16, with 0 new —
-  exactly the 14 targeted here. PR open, awaiting review before merge.
+  exactly the 14 targeted here. Merged.
+- 2026-08-24: Step 2 — added `shared/secrets.ts`'s `getSecret()` (module-level
+  cache, mirrors `cognito-client.ts`'s singleton-client pattern so
+  `aws-sdk-client-mock` needs no DI to test it) with TDD-first
+  `secrets.test.ts` (fetch, cache-hit skips a second SDK call, error
+  propagation, missing-`SecretString` guard). `auth-api/handler.ts` now
+  resolves `signingKey` via `getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID'))`;
+  `handler.test.ts` mocks `SecretsManagerClient` instead of setting
+  `SESSION_SIGNING_KEY` directly. No other file in the repo referenced the
+  old env var. Full test suite, lint, and `tsc --noEmit` all pass.
