@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 7 (ops-owned, see that step's own note)
+**Current step:** 9 (Step 7 is ops-owned, not a code session — skipped for now, see its own note)
 
 ## Context
 
@@ -326,7 +326,7 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 8 — TDD: `packages/ui-auth` (AuthChrome + profiles)
 
-- [ ] Write tests first, colocated, matching `SignInFlow.test.tsx`'s style:
+- [x] Write tests first, colocated, matching `SignInFlow.test.tsx`'s style:
       `profiles.test.ts` (`resolveProfile` for both builtins + a passthrough
       custom object; `builtinProfiles` has exactly those two keys) and
       `AuthChrome.test.tsx` (renders `children`/`banner`/`footer`; vlinder
@@ -335,13 +335,13 @@ changes that depend on the same "resolve a secret" capability.
       a custom inline `AuthProfile` is respected; `themeFromProfile()`
       includes `logoUrl` only for `logo.kind === 'image'`).
 
-- [ ] Copy `AuthChrome.tsx`/`profiles.ts` from `design_handoff_auth_chrome/`
+- [x] Copy `AuthChrome.tsx`/`profiles.ts` from `design_handoff_auth_chrome/`
       (checked into repo root for this handoff — see that directory's
       `README.md`) into `packages/ui-auth/src/`, adjusting only if a test
       reveals a mismatch (none expected — already spot-checked against the
       real `theme.ts`).
 
-- [ ] Export both from `packages/ui-auth/src/index.ts` per the handoff's
+- [x] Export both from `packages/ui-auth/src/index.ts` per the handoff's
       README step 2.
 
 - [ ] Once this step and Step 9 both land, delete `design_handoff_auth_chrome/`
@@ -351,7 +351,7 @@ changes that depend on the same "resolve a secret" capability.
       `.sastignore` (both added solely to keep CI green against this vendored
       bundle's own `.dc.html` mockups and README formatting).
 
-- [ ] Verify: `npm run test --workspace=packages/ui-auth`.
+- [x] Verify: `npm run test --workspace=packages/ui-auth`.
 
 ### Step 9 — Integration: `packages/auth-site`
 
@@ -565,3 +565,21 @@ changes that depend on the same "resolve a secret" capability.
   `tests/aws/vlinder_auth` — that root doesn't wire `ses_configuration` yet
   (Step 7's job), so it would now fail the new precondition immediately;
   confirmed this is the expected/documented gap, not a bug.
+- 2026-08-24: Step 7 skipped (explicitly ops-owned, not a code session) — the
+  plan doc's own step description already says so. Went straight to Step 8.
+- 2026-08-24: Step 8 — TDD-first `profiles.test.ts` and `AuthChrome.test.tsx`
+  (12 new tests), then copied `AuthChrome.tsx`/`profiles.ts` from
+  `design_handoff_auth_chrome/` into `packages/ui-auth/src/` essentially
+  as-is — one deliberate deviation from the handoff's literal snippet:
+  `AuthChrome`'s props parameter is `Readonly<AuthChromeProps>`, matching
+  Step 1's `Readonly<...>` convention across every other form component in
+  this package (avoids reintroducing the `typescript:S6759` finding Step 1
+  spent effort clearing). Exported both from `index.ts` per the handoff's
+  README step 2. One test-writing mismatch surfaced and was fixed on the
+  test side, not the component: the logo `<img>` has a deliberate `alt=""`
+  (the company name is already announced by the adjacent text span), which
+  makes it accessibility-presentational — `getByRole('img')` correctly
+  excludes it, so the test uses `getByAltText('')` instead. `design_handoff_
+  auth_chrome/` is left in place per the plan (only deleted once Step 9 also
+  lands). 12 new tests; full `ui-auth` suite (37, up from 25), full
+  workspace suite, `e2e` dry-run, lint, and `tsc --noEmit` all pass.
