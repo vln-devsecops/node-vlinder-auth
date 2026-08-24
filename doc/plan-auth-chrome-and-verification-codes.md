@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 5 (not yet started)
+**Current step:** 6 (not yet started)
 
 ## Context
 
@@ -236,15 +236,15 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 5 — New `pre-sign-up` Cognito trigger
 
-- [ ] `packages/lambda-src/src/pre-sign-up/handler.ts` (mirror
+- [x] `packages/lambda-src/src/pre-sign-up/handler.ts` (mirror
       `post-confirmation`'s file layout): unconditionally sets
       `event.response.autoConfirmUser = true` and
       `event.response.autoVerifyEmail = true`.
 
-- [ ] TDD first: `pre-sign-up/handler.test.ts` asserts both fields are always
+- [x] TDD first: `pre-sign-up/handler.test.ts` asserts both fields are always
       set true.
 
-- [ ] Add an entry point to `packages/lambda-src/esbuild.config.mjs`'s
+- [x] Add an entry point to `packages/lambda-src/esbuild.config.mjs`'s
       `handlers` array (`{ in: 'src/pre-sign-up/handler.ts', out:
       'dist/pre-sign-up/handler' }`) — the array is hardcoded to today's 4
       handlers; without this the new handler never lands in `dist/` and
@@ -511,3 +511,16 @@ changes that depend on the same "resolve a secret" capability.
   `ses_configuration.from_email_address`). 30 new/changed tests; full
   lambda-src suite (150, up from 132), full workspace suite, lint, and
   `tsc --noEmit` all pass.
+- 2026-08-24: Step 5 — added `pre-sign-up/handler.ts`: unconditionally sets
+  `autoConfirmUser`/`autoVerifyEmail` to `true` and returns the event, so
+  Cognito's own signup-verification email never fires and every account is
+  `CONFIRMED` the instant `SignUp` completes (the app-side login gate added
+  in Step 4 is what actually blocks sign-in until the app-owned code is
+  verified). Added the new entry point to `esbuild.config.mjs`'s `handlers`
+  array (first in the list, matching the order the other trigger handlers
+  already appear) and fixed that file's 3 pre-existing `javascript:S7772`
+  findings (`fs`/`url`/`path` → `node:fs`/`node:url`/`node:path`). Verified
+  the bundle actually picks up the new handler by running
+  `node esbuild.config.mjs` directly and checking `dist/pre-sign-up/` exists.
+  2 new tests; full lambda-src suite (152, up from 150), full workspace
+  suite, `e2e` dry-run, lint, and `tsc --noEmit` all pass.
