@@ -47,7 +47,7 @@ function validate(
 }
 
 /** Branded signup form. Client-side validation only; Cognito re-validates server-side regardless. */
-export function SignUpForm(props: SignUpFormProps) {
+export function SignUpForm(props: Readonly<SignUpFormProps>) {
   const theme = resolveTheme(props.theme)
   const [email, setEmail] = useState('')
   const [givenName, setGivenName] = useState('')

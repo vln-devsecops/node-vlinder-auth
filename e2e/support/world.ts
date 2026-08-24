@@ -123,7 +123,7 @@ export class AuthWorld extends World {
    * (sign-in, admin-panel) rather than exercising the signup flow itself.
    */
   async createConfirmedTestUser(emailPrefix: string, password: string): Promise<TestUser> {
-    const email = `${emailPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`
+    const email = `${emailPrefix}-${Date.now()}-${crypto.randomUUID()}@example.com`
 
     const created = await this.cognito.send(
       new AdminCreateUserCommand({

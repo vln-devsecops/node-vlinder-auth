@@ -16,7 +16,7 @@ export interface ForgotPasswordFormProps {
 const MIN_PASSWORD_LENGTH = 8
 
 /** Two-step flow: request a reset code, then confirm it with a new password. */
-export function ForgotPasswordForm(props: ForgotPasswordFormProps) {
+export function ForgotPasswordForm(props: Readonly<ForgotPasswordFormProps>) {
   const theme = resolveTheme(props.theme)
   const [step, setStep] = useState<'request' | 'confirm'>('request')
   const [email, setEmail] = useState('')

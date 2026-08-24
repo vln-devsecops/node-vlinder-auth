@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 0 (not yet started)
+**Current step:** 2 (not yet started)
 
 ## Context
 
@@ -94,31 +94,31 @@ here, first — fixing them now (rather than leaving them for whichever step
 happens to next touch the file, which for several of these is "never") is
 what "clean SAST" as an exit criterion (Step 11) depends on.
 
-- [ ] `e2e/support/world.ts:126` / `e2e/steps/signup.steps.ts:8`
+- [x] `e2e/support/world.ts:126` / `e2e/steps/signup.steps.ts:8`
       (`typescript:S2245`, MAJOR × 2) — `Math.random()` used to build unique
       per-scenario test emails. Swap both call sites to `crypto.randomUUID()`
       (or `randomBytes`); test-data uniqueness has no reason to use a PRNG
       SonarQube flags as cryptographically unsafe.
 
-- [ ] `packages/auth-site/admin/index.html:11` (`Web:InputWithoutLabelCheck`,
+- [x] `packages/auth-site/admin/index.html:11` (`Web:InputWithoutLabelCheck`,
       MAJOR) — associate the input with a `<label for>` or `aria-label`.
 
-- [ ] `packages/auth-site/src/admin-main.ts:71` (`typescript:S7785`, MAJOR) —
+- [x] `packages/auth-site/src/admin-main.ts:71` (`typescript:S7785`, MAJOR) —
       replace the promise chain with a top-level `await`.
 
-- [ ] `packages/ui-auth/src/VerifyEmailNotice.tsx` — `:25`
+- [x] `packages/ui-auth/src/VerifyEmailNotice.tsx` — `:25`
       (`typescript:S9011`, MAJOR, missing `type="button"`/`type="submit"`),
       `:28` (`typescript:S6819`, MAJOR, `role="status"` → `<output>`), `:10`
       (`typescript:S6759`, MINOR, mark props `Readonly<...>`). Neither Step 8
       nor Step 9 rewrites this component's internals — `AuthChrome` only
       wraps it from the outside — so fix it directly, here.
 
-- [ ] `packages/ui-auth/src/ConfirmSignUpForm.tsx:15`,
+- [x] `packages/ui-auth/src/ConfirmSignUpForm.tsx:15`,
       `ForgotPasswordForm.tsx:19`, `SignInButton.tsx:12`, `SignInFlow.tsx:29`,
       `SignUpForm.tsx:50` (`typescript:S6759`, MINOR × 5) — same "mark props
       read-only" fix across the rest of the untouched form components.
 
-- [ ] `packages/auth-site/vite.config.ts:2`, `vitest.config.ts:2`
+- [x] `packages/auth-site/vite.config.ts:2`, `vitest.config.ts:2`
       (`typescript:S7772`, MINOR × 2) — `import path from 'path'` →
       `'node:path'`.
 
@@ -437,3 +437,13 @@ changes that depend on the same "resolve a secret" capability.
   16 findings their rewrites clear incidentally, and a "clean SAST" exit
   criterion on the final step. All subsequent steps shifted up by one
   number (old Step 1 → 2, ... old Step 10 → 11).
+- 2026-08-24: Step 1 — fixed all 14 findings: `crypto.randomUUID()` in place
+  of `Math.random()` in the two e2e test-email builders; `aria-label` on the
+  admin search input; top-level `await` in `admin-main.ts`; `type="button"`
+  + `<output>` + `Readonly<...>` in `VerifyEmailNotice.tsx`; `Readonly<...>`
+  on the other five form components' props; `node:path` in both
+  `auth-site` Vite configs. Full test suite (`npm run test --workspaces`,
+  `e2e` dry-run), `npm run lint`, and `tsc --noEmit`/`tsc -b` across
+  `ui-auth`, `auth-site`, and `e2e` all pass. PR not yet opened, so the
+  "re-run `gh pr checks`" verification bullet is still unticked — do that
+  once this lands as a PR.
