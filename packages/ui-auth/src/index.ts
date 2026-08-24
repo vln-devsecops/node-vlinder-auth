@@ -18,3 +18,9 @@ export type { ConfirmResetValues, ForgotPasswordFormProps } from './ForgotPasswo
 
 export { defaultVlinderTheme, resolveTheme } from './theme'
 export type { VlinderAuthTheme } from './theme'
+
+export { AuthChrome, themeFromProfile } from './AuthChrome'
+export type { AuthChromeProps } from './AuthChrome'
+
+export { builtinProfiles, defaultProfile, resolveProfile, vlinderProfile } from './profiles'
+export type { AuthProfile, BuiltinProfileName } from './profiles'
