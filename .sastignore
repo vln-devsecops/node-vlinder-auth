@@ -1,0 +1,5 @@
+# Vendored, temporary design-handoff bundle (copy-as-is HTML mockups + a
+# component that gets copied into packages/ui-auth/src/ verbatim per the
+# plan doc) -- not our source, deleted once Steps 7/8 land. Remove this
+# line at the same time.
+design_handoff_auth_chrome/
