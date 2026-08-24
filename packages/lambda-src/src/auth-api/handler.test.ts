@@ -1,12 +1,21 @@
 import {
+  AdminGetUserCommand,
   AdminInitiateAuthCommand,
+  AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
-  ConfirmForgotPasswordCommand,
   NotAuthorizedException,
   SignUpCommand,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider'
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
+import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2'
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -14,22 +23,37 @@ import { handler } from './handler'
 import { AS_SESSION_COOKIE, IDENTIFY_SESSION_COOKIE, signSession, verifySession } from './session'
 
 const KEY = 'test-signing-key-000000000000000000000000'
+const nowSeconds = Math.floor(Date.now() / 1000)
+const FUTURE_EXPIRY = nowSeconds + 600
+
 const cognitoMock = mockClient(CognitoIdentityProviderClient)
 const secretsManagerMock = mockClient(SecretsManagerClient)
+const ddbMock = mockClient(DynamoDBDocumentClient)
+const sesMock = mockClient(SESv2Client)
 
 beforeEach(() => {
   cognitoMock.reset()
   secretsManagerMock.reset()
+  ddbMock.reset()
+  sesMock.reset()
   secretsManagerMock.on(GetSecretValueCommand).resolves({ SecretString: KEY })
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
+  process.env.VERIFICATION_CODES_TABLE_NAME = 'verification-codes-table'
+  process.env.VERIFICATION_CODE_TTL_SECONDS = '600'
+  process.env.VERIFICATION_CODE_MAX_ATTEMPTS = '5'
+  process.env.SES_FROM_ADDRESS = 'no-reply@vlinder.example'
 })
 
 afterEach(() => {
   delete process.env.SESSION_SIGNING_KEY_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
+  delete process.env.VERIFICATION_CODES_TABLE_NAME
+  delete process.env.VERIFICATION_CODE_TTL_SECONDS
+  delete process.env.VERIFICATION_CODE_MAX_ATTEMPTS
+  delete process.env.SES_FROM_ADDRESS
 })
 
 function event(
@@ -65,6 +89,7 @@ describe('auth-api handler', () => {
   })
 
   it('POST /auth/password sets the token as an HttpOnly cookie and returns only expiresAt', async () => {
+    ddbMock.on(GetCommand).resolves({})
     cognitoMock.on(AdminInitiateAuthCommand).resolves({
       AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
     })
@@ -89,6 +114,7 @@ describe('auth-api handler', () => {
   })
 
   it('POST /auth/password 401s on bad credentials without an AS cookie', async () => {
+    ddbMock.on(GetCommand).resolves({})
     cognitoMock
       .on(AdminInitiateAuthCommand)
       .rejects(new NotAuthorizedException({ message: 'no', $metadata: {} }))
@@ -108,8 +134,32 @@ describe('auth-api handler', () => {
     expect(res.statusCode).toBe(401)
   })
 
-  it('POST /auth/signup routes to Cognito SignUp with the name attributes', async () => {
+  it('POST /auth/password 401s when a signup verification code is still pending', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        email: 'jane@x.com',
+        purpose: 'signup',
+        code: '123456',
+        attempts: 0,
+        expiresAt: FUTURE_EXPIRY,
+      },
+    })
+    const token = await signSession({ identifier: 'jane@x.com', method: 'password' }, KEY, 300)
+    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
+
+    const res = await handler(
+      event('POST /auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
+    )
+
+    expect(res.statusCode).toBe(401)
+    expect(cognitoMock.commandCalls(AdminInitiateAuthCommand)).toHaveLength(0)
+  })
+
+  it('POST /auth/signup routes to Cognito SignUp and sends the first verification code', async () => {
     cognitoMock.on(SignUpCommand).resolves({ UserSub: 'sub-1' })
+    ddbMock.on(GetCommand).resolves({})
+    ddbMock.on(PutCommand).resolves({})
+    sesMock.on(SendEmailCommand).resolves({})
 
     const res = await handler(
       event('POST /auth/signup', {
@@ -125,6 +175,9 @@ describe('auth-api handler', () => {
         { Name: 'given_name', Value: 'Jane' },
         { Name: 'family_name', Value: 'Doe' },
       ],
+    })
+    expect(sesMock.commandCalls(SendEmailCommand)[0].args[0].input.Destination).toEqual({
+      ToAddresses: ['jane@x.com'],
     })
   })
 
@@ -143,8 +196,79 @@ describe('auth-api handler', () => {
     expect(JSON.parse(res.body!).error).toBe('User already exists')
   })
 
-  it('POST /auth/reset routes to Cognito ConfirmForgotPassword', async () => {
-    cognitoMock.on(ConfirmForgotPasswordCommand).resolves({})
+  it('POST /auth/confirm validates the code against the table and deletes it', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        email: 'jane@x.com',
+        purpose: 'signup',
+        code: '123456',
+        attempts: 0,
+        expiresAt: FUTURE_EXPIRY,
+      },
+    })
+    ddbMock.on(DeleteCommand).resolves({})
+
+    const res = await handler(
+      event('POST /auth/confirm', { body: { email: 'jane@x.com', code: '123456' } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(ddbMock.commandCalls(DeleteCommand)).toHaveLength(1)
+  })
+
+  it('POST /auth/confirm 400s on a wrong code', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        email: 'jane@x.com',
+        purpose: 'signup',
+        code: '123456',
+        attempts: 0,
+        expiresAt: FUTURE_EXPIRY,
+      },
+    })
+    ddbMock.on(UpdateCommand).resolves({})
+
+    const res = await handler(
+      event('POST /auth/confirm', { body: { email: 'jane@x.com', code: '000000' } }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /auth/resend gets-or-creates a code and re-sends it', async () => {
+    ddbMock.on(GetCommand).resolves({})
+    ddbMock.on(PutCommand).resolves({})
+    sesMock.on(SendEmailCommand).resolves({})
+
+    const res = await handler(event('POST /auth/resend', { body: { email: 'jane@x.com' } }))
+
+    expect(res.statusCode).toBe(200)
+    expect(sesMock.commandCalls(SendEmailCommand)).toHaveLength(1)
+  })
+
+  it('POST /auth/forgot sends a code when the account exists', async () => {
+    cognitoMock.on(AdminGetUserCommand).resolves({ Username: 'jane@x.com' })
+    ddbMock.on(GetCommand).resolves({})
+    ddbMock.on(PutCommand).resolves({})
+    sesMock.on(SendEmailCommand).resolves({})
+
+    const res = await handler(event('POST /auth/forgot', { body: { email: 'jane@x.com' } }))
+
+    expect(res.statusCode).toBe(200)
+    expect(sesMock.commandCalls(SendEmailCommand)).toHaveLength(1)
+  })
+
+  it('POST /auth/reset validates the code, then sets the password via AdminSetUserPassword', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        email: 'jane@x.com',
+        purpose: 'password-reset',
+        code: '123456',
+        attempts: 0,
+        expiresAt: FUTURE_EXPIRY,
+      },
+    })
+    cognitoMock.on(AdminSetUserPasswordCommand).resolves({})
 
     const res = await handler(
       event('POST /auth/reset', {
@@ -153,10 +277,11 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
-    expect(cognitoMock.commandCalls(ConfirmForgotPasswordCommand)[0].args[0].input).toMatchObject({
+    expect(cognitoMock.commandCalls(AdminSetUserPasswordCommand)[0].args[0].input).toMatchObject({
+      UserPoolId: 'us-east-1_example',
       Username: 'jane@x.com',
-      ConfirmationCode: '123456',
       Password: 'new-pw',
+      Permanent: true,
     })
   })
 

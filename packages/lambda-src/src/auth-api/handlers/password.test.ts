@@ -4,16 +4,22 @@ import {
   NotAuthorizedException,
   UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
+import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { signSession } from '../session'
-import { AuthFailedError, InvalidSessionError, password } from './password'
+import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './password'
 
 const KEY = 'test-signing-key-000000000000000000000000'
 const cognitoMock = mockClient(CognitoIdentityProviderClient)
+const ddbMock = mockClient(DynamoDBDocumentClient)
 
 beforeEach(() => {
   cognitoMock.reset()
+  ddbMock.reset()
+  // No pending signup-verification row by default -- most tests exercise the
+  // ordinary authenticated/challenge/failure paths past this gate.
+  ddbMock.on(GetCommand).resolves({})
 })
 
 const base = {
@@ -21,6 +27,8 @@ const base = {
   clientId: 'client-abc',
   userPoolId: 'us-east-1_example',
   signingKey: KEY,
+  ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+  verificationCodesTableName: 'verification-codes',
 }
 
 function identifySessionFor(identifier: string): Promise<string> {
@@ -105,5 +113,27 @@ describe('password', () => {
         }),
       ).rejects.toThrow(AuthFailedError)
     }
+  })
+
+  it('rejects sign-in with a pending signup verification code before touching Cognito', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        email: 'jane@example.com',
+        purpose: 'signup',
+        code: '123456',
+        attempts: 0,
+        expiresAt: nowSeconds + 600,
+      },
+    })
+
+    await expect(
+      password({
+        ...base,
+        identifySession: await identifySessionFor('jane@example.com'),
+        password: 'correct horse',
+      }),
+    ).rejects.toThrow(UnverifiedAccountError)
+    expect(cognitoMock.commandCalls(AdminInitiateAuthCommand)).toHaveLength(0)
   })
 })

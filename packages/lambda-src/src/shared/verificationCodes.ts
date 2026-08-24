@@ -65,6 +65,28 @@ export async function getOrCreateCode(params: GetOrCreateCodeParams): Promise<st
   return code
 }
 
+export interface HasPendingCodeParams {
+  email: string
+  purpose: string
+  ddbDocClient: DynamoDBDocumentClient
+  tableName: string
+}
+
+/**
+ * Read-only existence check for a login gate: does an unexpired row for
+ * (email, purpose) exist? Unlike verifyCode, this never mutates the row or
+ * consumes an attempt.
+ */
+export async function hasPendingCode(params: HasPendingCodeParams): Promise<boolean> {
+  const { email, purpose, ddbDocClient, tableName } = params
+
+  const existing = await ddbDocClient.send(
+    new GetCommand({ TableName: tableName, Key: { email, purpose } }),
+  )
+  const item = existing.Item as VerificationCodeItem | undefined
+  return item !== undefined && !isExpired(item)
+}
+
 export interface VerifyCodeParams {
   email: string
   purpose: string

@@ -1,18 +1,20 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
+import { getDdbDocClient } from '../shared/ddb-client'
 import { getSecret } from '../shared/secrets'
-import { identify, InvalidIdentifierError } from './handlers/identify'
-import { AuthFailedError, InvalidSessionError, password } from './handlers/password'
+import { getSesClient } from '../shared/ses-client'
+import { identify, IDENTIFY_SESSION_TTL_SECONDS, InvalidIdentifierError } from './handlers/identify'
+import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './handlers/password'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
 import { CognitoClientError } from './cognitoError'
+import { InvalidVerificationCodeError } from './verificationCodeError'
 import {
   AS_SESSION_COOKIE,
   IDENTIFY_SESSION_COOKIE,
   parseCookies,
   serializeSessionCookie,
 } from './session'
-import { IDENTIFY_SESSION_TTL_SECONDS } from './handlers/identify'
 
 function requireEnv(key: string): string {
   const value = process.env[key]
@@ -20,6 +22,11 @@ function requireEnv(key: string): string {
     throw new Error(`Missing required environment variable: ${key}`)
   }
   return value
+}
+
+/** Reads a request-body field as a string, defaulting anything else (including absent) to ''. */
+function bodyString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 function json(
@@ -46,12 +53,18 @@ export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const signingKey = await getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID'))
+  const ddbDocClient = getDdbDocClient()
+  const sesClient = getSesClient()
+  const verificationCodesTableName = requireEnv('VERIFICATION_CODES_TABLE_NAME')
+  const verificationCodeTtlSeconds = Number(requireEnv('VERIFICATION_CODE_TTL_SECONDS'))
+  const verificationCodeMaxAttempts = Number(requireEnv('VERIFICATION_CODE_MAX_ATTEMPTS'))
+  const fromAddress = requireEnv('SES_FROM_ADDRESS')
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 
   try {
     switch (event.routeKey) {
       case 'POST /auth/identify': {
-        const result = await identify({ identifier: String(body.identifier ?? ''), signingKey })
+        const result = await identify({ identifier: bodyString(body.identifier), signingKey })
         return json(
           200,
           { method: result.method },
@@ -67,11 +80,13 @@ export async function handler(
         const cookies = parseCookies(event.cookies)
         const result = await password({
           identifySession: cookies[IDENTIFY_SESSION_COOKIE],
-          password: String(body.password ?? ''),
+          password: bodyString(body.password),
           cognitoClient: getCognitoClient(),
           clientId: requireEnv('AUTH_CLIENT_ID'),
           userPoolId: requireEnv('USER_POOL_ID'),
           signingKey,
+          ddbDocClient,
+          verificationCodesTableName,
         })
 
         if (result.status === 'challenge') {
@@ -97,52 +112,76 @@ export async function handler(
       }
 
       case 'POST /auth/signup': {
+        const email = bodyString(body.email)
         await signUp({
-          email: String(body.email ?? ''),
-          password: String(body.password ?? ''),
-          givenName: String(body.givenName ?? ''),
-          familyName: String(body.familyName ?? ''),
+          email,
+          password: bodyString(body.password),
+          givenName: bodyString(body.givenName),
+          familyName: bodyString(body.familyName),
           cognitoClient: getCognitoClient(),
           clientId: requireEnv('AUTH_CLIENT_ID'),
+        })
+        // The account is auto-confirmed the instant SignUp completes (see
+        // pre-sign-up/handler.ts) but still login-gated until this code is
+        // verified -- send it now rather than waiting for an explicit resend.
+        await resendConfirmation({
+          email,
+          ddbDocClient,
+          tableName: verificationCodesTableName,
+          ttlSeconds: verificationCodeTtlSeconds,
+          sesClient,
+          fromAddress,
         })
         return json(200, {})
       }
 
       case 'POST /auth/confirm': {
         await confirmSignUp({
-          email: String(body.email ?? ''),
-          code: String(body.code ?? ''),
-          cognitoClient: getCognitoClient(),
-          clientId: requireEnv('AUTH_CLIENT_ID'),
+          email: bodyString(body.email),
+          code: bodyString(body.code),
+          ddbDocClient,
+          tableName: verificationCodesTableName,
+          maxAttempts: verificationCodeMaxAttempts,
         })
         return json(200, {})
       }
 
       case 'POST /auth/resend': {
         await resendConfirmation({
-          email: String(body.email ?? ''),
-          cognitoClient: getCognitoClient(),
-          clientId: requireEnv('AUTH_CLIENT_ID'),
+          email: bodyString(body.email),
+          ddbDocClient,
+          tableName: verificationCodesTableName,
+          ttlSeconds: verificationCodeTtlSeconds,
+          sesClient,
+          fromAddress,
         })
         return json(200, {})
       }
 
       case 'POST /auth/forgot': {
         await forgotPassword({
-          email: String(body.email ?? ''),
+          email: bodyString(body.email),
           cognitoClient: getCognitoClient(),
-          clientId: requireEnv('AUTH_CLIENT_ID'),
+          userPoolId: requireEnv('USER_POOL_ID'),
+          ddbDocClient,
+          tableName: verificationCodesTableName,
+          ttlSeconds: verificationCodeTtlSeconds,
+          sesClient,
+          fromAddress,
         })
         return json(200, {})
       }
 
       case 'POST /auth/reset': {
         await confirmForgotPassword({
-          email: String(body.email ?? ''),
-          code: String(body.code ?? ''),
-          newPassword: String(body.newPassword ?? ''),
+          email: bodyString(body.email),
+          code: bodyString(body.code),
+          newPassword: bodyString(body.newPassword),
           cognitoClient: getCognitoClient(),
-          clientId: requireEnv('AUTH_CLIENT_ID'),
+          userPoolId: requireEnv('USER_POOL_ID'),
+          ddbDocClient,
+          tableName: verificationCodesTableName,
+          maxAttempts: verificationCodeMaxAttempts,
         })
         return json(200, {})
       }
@@ -159,6 +198,12 @@ export async function handler(
     }
     if (error instanceof AuthFailedError) {
       return json(401, { error: error.message })
+    }
+    if (error instanceof UnverifiedAccountError) {
+      return json(401, { error: error.message })
+    }
+    if (error instanceof InvalidVerificationCodeError) {
+      return json(400, { error: error.message })
     }
     // Ordinary self-service failures (bad code, weak password, taken username)
     // surface as a 400 with the provider's message.
