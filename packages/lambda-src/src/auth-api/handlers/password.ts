@@ -4,6 +4,8 @@ import {
   NotAuthorizedException,
   UserNotFoundException,
 } from '@aws-sdk/client-cognito-identity-provider'
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import { hasPendingCode } from '../../shared/verificationCodes'
 import { verifySession } from '../session'
 
 // Step 2 of the identifier-first flow: the user submits their password. The
@@ -33,6 +35,8 @@ export interface PasswordParams {
   clientId: string
   userPoolId: string
   signingKey: string
+  ddbDocClient: DynamoDBDocumentClient
+  verificationCodesTableName: string
   now?: number
 }
 
@@ -41,13 +45,37 @@ export type PasswordResult =
   | { status: 'challenge'; challengeName: string; challengeSession: string | undefined }
 
 export async function password(params: PasswordParams): Promise<PasswordResult> {
-  const { identifySession, password, cognitoClient, clientId, userPoolId, signingKey, now } = params
+  const {
+    identifySession,
+    password,
+    cognitoClient,
+    clientId,
+    userPoolId,
+    signingKey,
+    ddbDocClient,
+    verificationCodesTableName,
+    now,
+  } = params
 
   const claims = await verifySession(identifySession, signingKey, now)
   if (!claims || typeof claims.identifier !== 'string') {
     throw new InvalidSessionError('The identify session is missing or has expired.')
   }
   const username = claims.identifier
+
+  // PreSignUp auto-confirms every account instantly (see
+  // pre-sign-up/handler.ts), so Cognito's own UserNotConfirmedException --
+  // today's implicit login-blocker for a never-verified user -- will never
+  // fire again. A pending signup code is this app's replacement gate.
+  const pendingVerification = await hasPendingCode({
+    email: username,
+    purpose: 'signup',
+    ddbDocClient,
+    tableName: verificationCodesTableName,
+  })
+  if (pendingVerification) {
+    throw new UnverifiedAccountError('Please verify your email address before signing in.')
+  }
 
   let response
   try {
@@ -95,3 +123,4 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
 
 export class InvalidSessionError extends Error {}
 export class AuthFailedError extends Error {}
+export class UnverifiedAccountError extends Error {}

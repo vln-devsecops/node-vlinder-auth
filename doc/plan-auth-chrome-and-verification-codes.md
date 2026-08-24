@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 4 (not yet started)
+**Current step:** 5 (not yet started)
 
 ## Context
 
@@ -194,7 +194,7 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 4 — Wire the primitives into the auth-api handlers
 
-- [ ] `handlers/registration.ts`: `signUp()` unchanged (still creates the
+- [x] `handlers/registration.ts`: `signUp()` unchanged (still creates the
       Cognito account via `SignUpCommand` — `PreSignUp`, Step 5, intercepts it
       to skip Cognito's native verification). Replace `confirmSignUp()` /
       `resendConfirmation()` — no more `ConfirmSignUpCommand` /
@@ -203,7 +203,7 @@ changes that depend on the same "resolve a secret" capability.
       is already Cognito-`CONFIRMED` from the moment of `SignUp`, thanks to
       auto-confirm); resend calls `getOrCreateCode` + re-sends.
 
-- [ ] `handlers/recovery.ts`: replace `forgotPassword()` /
+- [x] `handlers/recovery.ts`: replace `forgotPassword()` /
       `confirmForgotPassword()` — no more `ForgotPasswordCommand` /
       `ConfirmForgotPasswordCommand`. Request step: `AdminGetUser` first
       (respond identically whether or not the account exists, to avoid
@@ -211,7 +211,7 @@ changes that depend on the same "resolve a secret" capability.
       `getOrCreateCode`+send if it does); confirm step: validate the code,
       then `AdminSetUserPasswordCommand({ Permanent: true })` directly.
 
-- [ ] `handlers/password.ts`: **new login gate.** Since `PreSignUp` (Step 5)
+- [x] `handlers/password.ts`: **new login gate.** Since `PreSignUp` (Step 5)
       auto-confirms every account instantly, Cognito's own
       `UserNotConfirmedException` (today's implicit login-blocker for a
       never-verified user) will never fire again. Before calling
@@ -220,15 +220,15 @@ changes that depend on the same "resolve a secret" capability.
       with a "please verify your email" error (same shape as the other
       friendly auth errors here).
 
-- [ ] Update `handler.ts`'s route glue (`POST /auth/signup` now also
+- [x] Update `handler.ts`'s route glue (`POST /auth/signup` now also
       triggers the first code send).
 
-- [ ] TDD first, following `handlers/recovery.test.ts`'s existing
+- [x] TDD first, following `handlers/recovery.test.ts`'s existing
       `aws-sdk-client-mock` + DI style: rewrite `handlers/registration.test.ts`
       / `handlers/recovery.test.ts` around the new table-backed logic; add a
       `handlers/password.test.ts` case for the pending-verification gate.
 
-- [ ] This rewrite touches every route in `handler.ts`'s switch, which also
+- [x] This rewrite touches every route in `handler.ts`'s switch, which also
       clears 9 pre-existing SonarQube findings there: a duplicate
       `./handlers/identify` import (`typescript:S3863`, lines 3 & 14) and
       seven `body.x ?? ''` default-stringification hits (`typescript:S6551`).
@@ -283,6 +283,15 @@ changes that depend on the same "resolve a secret" capability.
       add `kms:Decrypt`, `kms:GenerateDataKey`, `kms:DescribeKey` on
       `module.verification_codes.kms_key_arn`, mirroring the identical
       statement on `pre_token_generation`'s policy.
+
+- [ ] `auth_api`'s Lambda environment: Step 4's `handler.ts` already reads
+      (and `requireEnv`s) four new variables, so these exact names must be
+      set or the function throws on its first invocation —
+      `VERIFICATION_CODES_TABLE_NAME` (`module.verification_codes.table_name`),
+      `VERIFICATION_CODE_TTL_SECONDS` / `VERIFICATION_CODE_MAX_ATTEMPTS`
+      (string-ified `var.verification_code_ttl_seconds`/
+      `var.verification_code_max_attempts`, the next bullet), and
+      `SES_FROM_ADDRESS` (`var.ses_configuration.from_email_address`).
 
 - [ ] New variables: `verification_code_ttl_seconds` (default 600),
       `verification_code_max_attempts` (default 5).
@@ -474,4 +483,31 @@ changes that depend on the same "resolve a secret" capability.
   step's TDD bullet, but keeps `email.ts`'s purpose-branching covered,
   matching this directory's near-universal colocated-test convention).
   11 new tests; full suite (132 in lambda-src, up from 121), lint, and
+  `tsc --noEmit` all pass.
+- 2026-08-24: Step 4 — rewrote `registration.ts` (`confirmSignUp`/
+  `resendConfirmation` now call `verifyCode`/`getOrCreateCode` against the
+  table instead of Cognito's `ConfirmSignUpCommand`/
+  `ResendConfirmationCodeCommand`; `signUp()` untouched), `recovery.ts`
+  (`forgotPassword` does `AdminGetUser` then an identical response either
+  way; `confirmForgotPassword` validates the code, then
+  `AdminSetUserPasswordCommand({ Permanent: true })`), and `password.ts`
+  (new `hasPendingCode`-backed gate throwing `UnverifiedAccountError`,
+  mapped to 401 like the other friendly auth errors). Added
+  `hasPendingCode` to `shared/verificationCodes.ts` (Step 3 didn't
+  anticipate this read-only existence-check need; it's a natural extension
+  of that module, not a new one) and a shared
+  `auth-api/verificationCodeError.ts` (`assertVerified`) so both
+  `registration.ts` and `recovery.ts` map `VerifyCodeResult` to the same
+  friendly error rather than duplicating the mapping. `handler.ts`'s route
+  glue now resolves `ddbDocClient`/`sesClient`/table-name/TTL/max-attempts/
+  from-address once per invocation and threads them through; `/auth/signup`
+  calls `resendConfirmation` right after `signUp` to trigger the first send
+  (safe because `getOrCreateCode` is idempotent). Fixed the 9 pre-existing
+  SonarQube findings incidentally (merged the duplicate `./handlers/identify`
+  import; replaced every `String(x ?? '')` with a `bodyString()` helper).
+  **New env vars Step 6 must wire into Terraform, exact names:**
+  `VERIFICATION_CODES_TABLE_NAME`, `VERIFICATION_CODE_TTL_SECONDS`,
+  `VERIFICATION_CODE_MAX_ATTEMPTS`, `SES_FROM_ADDRESS` (sourced from
+  `ses_configuration.from_email_address`). 30 new/changed tests; full
+  lambda-src suite (150, up from 132), full workspace suite, lint, and
   `tsc --noEmit` all pass.
