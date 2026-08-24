@@ -6,6 +6,7 @@ import {
   SignUpCommand,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider'
+import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -14,16 +15,19 @@ import { AS_SESSION_COOKIE, IDENTIFY_SESSION_COOKIE, signSession, verifySession 
 
 const KEY = 'test-signing-key-000000000000000000000000'
 const cognitoMock = mockClient(CognitoIdentityProviderClient)
+const secretsManagerMock = mockClient(SecretsManagerClient)
 
 beforeEach(() => {
   cognitoMock.reset()
-  process.env.SESSION_SIGNING_KEY = KEY
+  secretsManagerMock.reset()
+  secretsManagerMock.on(GetSecretValueCommand).resolves({ SecretString: KEY })
+  process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
 })
 
 afterEach(() => {
-  delete process.env.SESSION_SIGNING_KEY
+  delete process.env.SESSION_SIGNING_KEY_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
 })
