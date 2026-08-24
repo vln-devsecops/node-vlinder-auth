@@ -439,8 +439,8 @@ changes that depend on the same "resolve a secret" capability.
   number (old Step 1 → 2, ... old Step 10 → 11).
 - 2026-08-24: Step 1 — fixed all 14 findings: `crypto.randomUUID()` in place
   of `Math.random()` in the two e2e test-email builders; `aria-label` on the
-  admin search input; top-level `await` in `admin-main.ts`; `type="button"`
-  + `<output>` + `Readonly<...>` in `VerifyEmailNotice.tsx`; `Readonly<...>`
+  admin search input; top-level `await` in `admin-main.ts`; `type="button"`,
+  `<output>`, and `Readonly<...>` in `VerifyEmailNotice.tsx`; `Readonly<...>`
   on the other five form components' props; `node:path` in both
   `auth-site` Vite configs. Full test suite (`npm run test --workspaces`,
   `e2e` dry-run), `npm run lint`, and `tsc --noEmit`/`tsc -b` across
