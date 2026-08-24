@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 6 (not yet started)
+**Current step:** 7 (ops-owned, see that step's own note)
 
 ## Context
 
@@ -254,12 +254,12 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 6 — Terraform wiring (`terraform-modules/modules/aws/vlinder_auth`)
 
-- [ ] New `pre_sign_up` Lambda resource + `lambda_config.pre_sign_up` wiring,
+- [x] New `pre_sign_up` Lambda resource + `lambda_config.pre_sign_up` wiring,
       mirroring the existing `post_confirmation`/`pre_token_generation`
       blocks (IAM role, log group, packaging via the shared
       `data.archive_file.lambda_package`).
 
-- [ ] `terraform-modules/modules/aws/dynamodb` has **no TTL support today**
+- [x] `terraform-modules/modules/aws/dynamodb` has **no TTL support today**
       (checked `main.tf` — no `ttl` block on `aws_dynamodb_table`, no
       TTL-related variable). Add an optional `ttl_attribute` variable to the
       shared submodule (default `null`, emitting a `ttl { attribute_name =
@@ -267,12 +267,12 @@ changes that depend on the same "resolve a secret" capability.
       next bullet — this is a cross-cutting change to code every other table
       composing this submodule also uses, not part of `vlinder_auth` itself.
 
-- [ ] New DynamoDB table `verification_codes`, composed via the same
+- [x] New DynamoDB table `verification_codes`, composed via the same
       `aws/dynamodb` submodule already used for `module.user_role_assignments`
       (now with `ttl_attribute = "expiresAt"` from the bullet above). Key:
       `email` (partition) + `purpose` (sort).
 
-- [ ] `auth_api`'s IAM policy: remove `cognito-idp:ConfirmSignUp`,
+- [x] `auth_api`'s IAM policy: remove `cognito-idp:ConfirmSignUp`,
       `ResendConfirmationCode`, `ForgotPassword`, `ConfirmForgotPassword`
       (no longer called); add `cognito-idp:AdminSetUserPassword`,
       `cognito-idp:AdminGetUser`, `ses:SendEmail` (scoped to the SES identity
@@ -284,7 +284,7 @@ changes that depend on the same "resolve a secret" capability.
       `module.verification_codes.kms_key_arn`, mirroring the identical
       statement on `pre_token_generation`'s policy.
 
-- [ ] `auth_api`'s Lambda environment: Step 4's `handler.ts` already reads
+- [x] `auth_api`'s Lambda environment: Step 4's `handler.ts` already reads
       (and `requireEnv`s) four new variables, so these exact names must be
       set or the function throws on its first invocation —
       `VERIFICATION_CODES_TABLE_NAME` (`module.verification_codes.table_name`),
@@ -293,22 +293,23 @@ changes that depend on the same "resolve a secret" capability.
       `var.verification_code_max_attempts`, the next bullet), and
       `SES_FROM_ADDRESS` (`var.ses_configuration.from_email_address`).
 
-- [ ] New variables: `verification_code_ttl_seconds` (default 600),
+- [x] New variables: `verification_code_ttl_seconds` (default 600),
       `verification_code_max_attempts` (default 5).
 
-- [ ] `ses_configuration` becomes load-bearing (SES has no zero-config
+- [x] `ses_configuration` becomes load-bearing (SES has no zero-config
       fallback the way `COGNITO_DEFAULT` was) — add a `precondition`
       requiring it non-null whenever `local.create_public_auth_api` is true,
       so misconfiguration fails at `plan` time.
 
-- [ ] Leave `verification_message_template`/Cognito's own `email_configuration`
+- [x] Leave `verification_message_template`/Cognito's own `email_configuration`
       block alone — still backs the separate, currently-unused
       `attributes_require_verification_before_update` (email-change
       re-verification) flow.
 
 - [ ] Verify: `terraform validate` / `plan` against
       `terraform-modules/tests/aws/vlinder_auth` (once Step 7 wires
-      `ses_configuration` in there).
+      `ses_configuration` in there). Not done this session — see the
+      Progress Log entry below for what was verified instead.
 
 ### Step 7 — Deployment prerequisites (ops, not a code session — owned by the user)
 
@@ -524,3 +525,43 @@ changes that depend on the same "resolve a secret" capability.
   `node esbuild.config.mjs` directly and checking `dist/pre-sign-up/` exists.
   2 new tests; full lambda-src suite (152, up from 150), full workspace
   suite, `e2e` dry-run, lint, and `tsc --noEmit` all pass.
+- 2026-08-24: Step 6 — Terraform wiring, done in the `terraform-modules` repo
+  (PR #237 against `feature/cognito-auth-module`, since `vlinder_auth` isn't
+  on `main` yet). Added the `pre_sign_up` Lambda (mirrors
+  `post_confirmation`/`pre_token_generation`; no env vars, no IAM beyond
+  basic execution — the handler is a pure stateless auto-confirm trigger)
+  and wired it into `lambda_config`. Added an optional `ttl_attribute`
+  variable to the shared `aws/dynamodb` submodule (previously no TTL support
+  at all) and composed a new `verification_codes` table from it
+  (`email`/`purpose` keys, TTL on `expiresAt`, deletion protection off —
+  unlike `user_role_assignments`, this data is short-TTL and reproducible,
+  so it isn't wired to its own consumer-facing toggle). Rewrote `auth_api`'s
+  IAM policy per the plan (dropped the four Cognito code-flow actions; added
+  `AdminGetUser`/`AdminSetUserPassword`, `ses:SendEmail`, table CRUD, and the
+  table's KMS grant merged into the existing CMK statement) and its Lambda
+  environment (the four exact env var names Step 4 already reads). Made
+  `ses_configuration` load-bearing via a `check` block (matching this repo's
+  existing `central_logs` precondition-testing pattern) plus a mirroring
+  `lifecycle precondition` on `aws_lambda_function.auth_api` — both are
+  needed because a bare reference to `var.ses_configuration.source_arn`/
+  `.from_email_address` elsewhere in the resource would hard-error the plan
+  before the friendlier message ever showed, so those two reads are wrapped
+  in `try(..., "")`. Added a `verification_codes_table_name` output
+  (mirrors `role_assignments_table_name`) since Step 10's e2e coverage will
+  need it. All 7 of the module's existing `.tftest.hcl` files needed
+  `ses_configuration` added to their shared `variables {}` block once the
+  precondition went in (every one of them defaults to `auth_profile =
+  "full"`); added 9 new test cases across `lambdas.tftest.hcl` and
+  `auth_api.tftest.hcl` (pre_sign_up wiring/handler/no-env-vars, the IAM
+  policy's dropped/added actions, the new env vars and their overrides, and
+  the precondition failure via `expect_failures`). `terraform test` passes
+  in both `modules/aws/dynamodb` (7, up from 5) and `modules/aws/vlinder_auth`
+  (57, up from 48); `terraform validate` passes in `modules/aws/vlinder_auth`,
+  `tests/aws/vlinder_auth`, and `examples/aws/vlinder_auth`; `terraform fmt
+  -check -recursive`, `tflint --recursive`, `trivy config --severity
+  HIGH,CRITICAL`, and `checkov` (one new inline skip added with rationale:
+  `CKV_AWS_173` on `pre_sign_up`, which has no `environment` block at all)
+  all pass. **Not done:** a real `terraform plan` against
+  `tests/aws/vlinder_auth` — that root doesn't wire `ses_configuration` yet
+  (Step 7's job), so it would now fail the new precondition immediately;
+  confirmed this is the expected/documented gap, not a bug.
