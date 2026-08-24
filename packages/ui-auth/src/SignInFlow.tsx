@@ -26,7 +26,7 @@ export interface SignInFlowProps {
  * A federated identifier resolves to a redirect instead. The SPA never speaks
  * to the identity provider directly -- see doc/vendor-neutral-auth.md.
  */
-export function SignInFlow(props: SignInFlowProps) {
+export function SignInFlow(props: Readonly<SignInFlowProps>) {
   const theme = resolveTheme(props.theme)
   const [step, setStep] = useState<'identifier' | 'password'>('identifier')
   const [identifier, setIdentifier] = useState('')

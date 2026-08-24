@@ -7,7 +7,7 @@ export interface VerifyEmailNoticeProps {
   theme?: Partial<VlinderAuthTheme>
 }
 
-export function VerifyEmailNotice(props: VerifyEmailNoticeProps) {
+export function VerifyEmailNotice(props: Readonly<VerifyEmailNoticeProps>) {
   const theme = resolveTheme(props.theme)
   const [resent, setResent] = useState(false)
 
@@ -22,10 +22,14 @@ export function VerifyEmailNotice(props: VerifyEmailNoticeProps) {
         We sent a verification code to <strong>{props.email}</strong>. Enter it below to
         finish signing up.
       </p>
-      <button onClick={handleResend} style={{ backgroundColor: theme.primaryColor }}>
+      <button
+        type="button"
+        onClick={handleResend}
+        style={{ backgroundColor: theme.primaryColor }}
+      >
         Resend email
       </button>
-      {resent && <p role="status">Verification email resent.</p>}
+      {resent && <output>Verification email resent.</output>}
     </div>
   )
 }

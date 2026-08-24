@@ -68,7 +68,9 @@ async function main(): Promise<void> {
   rerender(users)
 }
 
-main().catch((error: unknown) => {
+try {
+  await main()
+} catch (error: unknown) {
   console.error('Admin panel failed to load', error)
-})
+}
 

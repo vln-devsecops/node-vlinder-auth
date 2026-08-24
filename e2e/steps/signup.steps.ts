@@ -5,7 +5,7 @@ import { pollUntil } from '../support/poll'
 import { TEST_PASSWORD } from './common.steps'
 
 When('I sign up with a new email and password', async function (this: AuthWorld) {
-  const email = `signup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`
+  const email = `signup-${Date.now()}-${crypto.randomUUID()}@example.com`
   this.testUser = { email, password: TEST_PASSWORD, userId: '' }
 
   await this.page.getByRole('button', { name: 'Create account' }).click()

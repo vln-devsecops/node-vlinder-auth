@@ -9,7 +9,7 @@ export interface SignInButtonProps {
 
 /** Sign-in form that calls onSubmit with email and password for direct Cognito IDP API auth.
  * The consuming app is responsible for calling InitiateAuth (USER_PASSWORD_AUTH flow) in onSubmit. */
-export function SignInButton(props: SignInButtonProps) {
+export function SignInButton(props: Readonly<SignInButtonProps>) {
   const theme = resolveTheme(props.theme)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

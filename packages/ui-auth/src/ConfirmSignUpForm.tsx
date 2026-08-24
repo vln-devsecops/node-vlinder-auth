@@ -12,7 +12,7 @@ export interface ConfirmSignUpFormProps {
  * domain, which vlinder_auth deliberately doesn't create). The consuming
  * app calls ConfirmSignUp in onConfirm.
  */
-export function ConfirmSignUpForm(props: ConfirmSignUpFormProps) {
+export function ConfirmSignUpForm(props: Readonly<ConfirmSignUpFormProps>) {
   const theme = resolveTheme(props.theme)
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | undefined>(undefined)
