@@ -122,7 +122,7 @@ what "clean SAST" as an exit criterion (Step 11) depends on.
       (`typescript:S7772`, MINOR × 2) — `import path from 'path'` →
       `'node:path'`.
 
-- [ ] Verify: re-run the PR scan (`gh pr checks`) and confirm its "Removed"
+- [x] Verify: re-run the PR scan (`gh pr checks`) and confirm its "Removed"
       column accounts for all 14 of these, with "Added" at 0.
 
 ### Step 2 — Fix the session-signing-key secret-resolution gap
@@ -444,6 +444,6 @@ changes that depend on the same "resolve a secret" capability.
   on the other five form components' props; `node:path` in both
   `auth-site` Vite configs. Full test suite (`npm run test --workspaces`,
   `e2e` dry-run), `npm run lint`, and `tsc --noEmit`/`tsc -b` across
-  `ui-auth`, `auth-site`, and `e2e` all pass. PR not yet opened, so the
-  "re-run `gh pr checks`" verification bullet is still unticked — do that
-  once this lands as a PR.
+  `ui-auth`, `auth-site`, and `e2e` all pass. Opened as PR #70; CI confirms
+  the SonarQube scan dropped from 30 baseline findings to 16, with 0 new —
+  exactly the 14 targeted here. PR open, awaiting review before merge.
