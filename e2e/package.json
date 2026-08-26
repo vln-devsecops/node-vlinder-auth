@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-cognito-identity-provider": "^3.1101.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1116.0",
     "@aws-sdk/client-dynamodb": "^3.1115.0",
     "@aws-sdk/lib-dynamodb": "^3.1089.0"
   },
