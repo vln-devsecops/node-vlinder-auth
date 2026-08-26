@@ -15,25 +15,13 @@ export interface AuthProfile {
   logo: { kind: 'image'; src: string } | { kind: 'circle' }
 }
 
-/** Vendored, baked-in profile matching the Vlinder Software design system. */
-export const vlinderProfile: AuthProfile = {
-  name: 'vlinder',
-  primaryColor: 'oklch(52% 0.17 266)',
-  primaryHoverColor: 'oklch(44% 0.16 266)',
-  pageBackground: 'oklch(98% 0.004 70)',
-  cardBackground: '#ffffff',
-  borderColor: 'oklch(90% 0.008 70)',
-  textPrimary: 'oklch(18% 0.008 70)',
-  textSecondary: 'oklch(45% 0.012 70)',
-  panelTextColor: '#ffffff',
-  fontFamily: "'General Sans', sans-serif",
-  radius: '16px',
-  companyName: 'Vlinder Software',
-  tagline: 'Security built into every layer of your IIoT stack.',
-  logo: { kind: 'image', src: '/assets/vlinder-logo-transparent.svg' },
-}
-
-/** Un-branded fallback profile: same layout, neutral green palette, circle placeholder logo. */
+/**
+ * Un-branded fallback profile: same layout, neutral green palette, circle
+ * placeholder logo. The only builtin profile -- vendor-specific branding
+ * (e.g. Vlinder Software's own profile) lives in a separate private repo,
+ * not here, and is passed in as a custom AuthProfile object rather than a
+ * builtin name.
+ */
 export const defaultProfile: AuthProfile = {
   name: 'default',
   primaryColor: 'oklch(52% 0.14 148)',
@@ -51,7 +39,7 @@ export const defaultProfile: AuthProfile = {
   logo: { kind: 'circle' },
 }
 
-export const builtinProfiles = { vlinder: vlinderProfile, default: defaultProfile } as const
+export const builtinProfiles = { default: defaultProfile } as const
 export type BuiltinProfileName = keyof typeof builtinProfiles
 
 export function resolveProfile(profile: BuiltinProfileName | AuthProfile): AuthProfile {

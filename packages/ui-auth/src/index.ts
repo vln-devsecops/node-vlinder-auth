@@ -22,5 +22,5 @@ export type { VlinderAuthTheme } from './theme'
 export { AuthChrome, themeFromProfile } from './AuthChrome'
 export type { AuthChromeProps } from './AuthChrome'
 
-export { builtinProfiles, defaultProfile, resolveProfile, vlinderProfile } from './profiles'
+export { builtinProfiles, defaultProfile, resolveProfile } from './profiles'
 export type { AuthProfile, BuiltinProfileName } from './profiles'

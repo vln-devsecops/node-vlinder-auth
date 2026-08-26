@@ -355,19 +355,29 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 9 — Integration: `packages/auth-site`
 
-- [ ] Rewrite `main.tsx`'s four page branches (`signin`/`signup`/`forgot`/
-      `verify`) to wrap each form in `<AuthChrome profile={vlinderProfile}
-      banner={...} footer={...}>`, passing `theme={themeFromProfile(profile)}`
-      to the wrapped form(s). Preserve all existing handlers unchanged.
+> **Correction (2026-08-24, post-Step-8 review):** `packages/ui-auth` no
+> longer ships a `vlinderProfile` builtin — Vlinder-specific branding
+> (colors/logo/tagline) belongs in a separate private repo, not in this
+> shared library, and `AuthChrome`'s own default is now the generic
+> `'default'` profile, not `'vlinder'`. The bullets below still assume a
+> local `vlinderProfile` import and a logo asset fetched directly into this
+> repo — **that mechanism needs to be redesigned before this step starts**
+> (e.g. the private repo could publish an `AuthProfile` object `auth-site`
+> imports as a dependency, or `main.tsx` could accept a profile override via
+> the existing runtime `config.json` mechanism). Whoever picks up Step 9
+> should resolve that design question first rather than reintroducing
+> Vlinder branding into this repo to match the stale text below.
 
-- [ ] Logo asset: fetch `assets/logo-transparent.svg` from the private
-      `VlinderSoftware/design-system` repo (confirmed as the correct
-      transparent/light variant via `guidelines/brand-logo.html`, staged
-      against a dark background there, matching `AuthChrome`'s colored brand
-      panel). Write to
-      `packages/auth-site/public/assets/vlinder-logo-transparent.svg` (no
-      `public/` dir exists yet — Vite serves it at the site root once
-      created).
+- [ ] Rewrite `main.tsx`'s four page branches (`signin`/`signup`/`forgot`/
+      `verify`) to wrap each form in `<AuthChrome profile={...} banner={...}
+      footer={...}>`, passing `theme={themeFromProfile(profile)}` to the
+      wrapped form(s) — see the correction note above for where `profile`
+      should come from. Preserve all existing handlers unchanged.
+
+- [ ] Logo asset: see the correction note above — this bullet originally had
+      the logo fetched directly into this repo's `packages/auth-site/public/`,
+      which conflicts with keeping Vlinder branding out of this repo.
+      Resolve alongside the profile-source design question.
 
 - [ ] Leave `theme.ts`'s unrelated `defaultVlinderTheme.logoUrl` (pointing at
       a separately-missing `/assets/vlinder-logo.svg`) alone.
@@ -583,3 +593,22 @@ changes that depend on the same "resolve a secret" capability.
   auth_chrome/` is left in place per the plan (only deleted once Step 9 also
   lands). 12 new tests; full `ui-auth` suite (37, up from 25), full
   workspace suite, `e2e` dry-run, lint, and `tsc --noEmit` all pass.
+- 2026-08-24: Post-Step-8 review correction — `AuthChrome`'s undeclared
+  default was `'vlinder'`; should be `'default'` (a company-specific brand
+  should never be the library's implicit fallback). Separately, the
+  `vlinderProfile` object itself doesn't belong in this repo at all —
+  Vlinder-specific branding belongs in a separate private repo, consumed as
+  a custom `AuthProfile` value (the passthrough branch `resolveProfile`
+  already supports), not vendored as a builtin here. Removed `vlinderProfile`
+  from `profiles.ts`/`index.ts` entirely; `builtinProfiles` now has exactly
+  one key (`default`); `AuthChrome`'s fallback changed to `'default'`.
+  Rewrote `profiles.test.ts`/`AuthChrome.test.tsx` accordingly (a custom
+  inline `AuthProfile` with an image-kind logo now covers the `<img>`/
+  `logoUrl` branches previously covered by `vlinderProfile`). Added a
+  correction note directly on Step 9 below, since its original bullets
+  assumed a local `vlinderProfile` import and fetched the Vlinder logo
+  directly into this repo — both now need a different design, to be
+  resolved when Step 9 actually starts, not decided here. 36 tests (one
+  fewer than Step 8's 37 — collapsed two now-redundant "default profile"
+  assertions into one); full `ui-auth` suite, full workspace suite, `e2e`
+  dry-run, lint, and `tsc --noEmit` all pass.

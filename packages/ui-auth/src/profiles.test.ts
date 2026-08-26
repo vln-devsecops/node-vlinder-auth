@@ -1,22 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { builtinProfiles, defaultProfile, resolveProfile, vlinderProfile } from './profiles'
+import { builtinProfiles, defaultProfile, resolveProfile } from './profiles'
 
 describe('builtinProfiles', () => {
-  it('has exactly the vlinder and default keys', () => {
-    expect(Object.keys(builtinProfiles).sort()).toEqual(['default', 'vlinder'])
+  it('has exactly the default key', () => {
+    expect(Object.keys(builtinProfiles)).toEqual(['default'])
   })
 
-  it('maps each key to its matching exported profile', () => {
-    expect(builtinProfiles.vlinder).toBe(vlinderProfile)
+  it('maps "default" to the exported defaultProfile', () => {
     expect(builtinProfiles.default).toBe(defaultProfile)
   })
 })
 
 describe('resolveProfile', () => {
-  it('resolves the "vlinder" builtin name', () => {
-    expect(resolveProfile('vlinder')).toBe(vlinderProfile)
-  })
-
   it('resolves the "default" builtin name', () => {
     expect(resolveProfile('default')).toBe(defaultProfile)
   })
