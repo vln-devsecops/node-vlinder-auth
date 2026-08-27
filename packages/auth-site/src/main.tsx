@@ -6,6 +6,11 @@ import {
   ForgotPasswordForm,
   VerifyEmailNotice,
   ConfirmSignUpForm,
+  AuthChrome,
+  themeFromProfile,
+  resolveProfile,
+  type AuthProfile,
+  type BuiltinProfileName,
 } from '@vln-devsecops/auth-ui'
 import { saveSession } from './session'
 import { loadConfig } from './config'
@@ -102,12 +107,19 @@ function App() {
   // blocks the redirect a user expects; loadConfig() resolves long before a
   // real login submission completes.
   const [adminEnabled, setAdminEnabled] = useState(true)
+  // Defaults to AuthChrome's own generic profile until config.json resolves.
+  const [profile, setProfile] = useState<BuiltinProfileName | AuthProfile>('default')
 
   useEffect(() => {
     loadConfig()
-      .then((config) => setAdminEnabled(config.adminEnabled))
+      .then((config) => {
+        setAdminEnabled(config.adminEnabled)
+        setProfile(config.profile)
+      })
       .catch(() => undefined)
   }, [])
+
+  const theme = themeFromProfile(resolveProfile(profile))
 
   const handleIdentify = (identifier: string) => {
     setError(null)
@@ -176,31 +188,53 @@ function App() {
     }
   }
 
+  const footer = (() => {
+    switch (page) {
+      case 'signin':
+        return (
+          <>
+            <button type="button" onClick={() => { setError(null); setPage('signup') }}>Create account</button>
+            <button type="button" onClick={() => { setError(null); setPage('forgot') }}>Forgot password?</button>
+          </>
+        )
+      case 'signup':
+      case 'forgot':
+        return (
+          <button type="button" onClick={() => { setError(null); setPage('signin') }}>Back to sign in</button>
+        )
+      case 'verify':
+        return undefined
+    }
+  })()
+
   return (
-    <div>
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
-
+    <AuthChrome
+      profile={profile}
+      banner={
+        <>
+          {error && <p role="alert">{error}</p>}
+          {notice && <output>{notice}</output>}
+        </>
+      }
+      footer={footer}
+    >
       {page === 'signin' && (
-        <>
-          <SignInFlow onIdentify={handleIdentify} onPassword={handlePassword} onError={setError} />
-          <button onClick={() => { setError(null); setPage('signup') }}>Create account</button>
-          <button onClick={() => { setError(null); setPage('forgot') }}>Forgot password?</button>
-        </>
+        <SignInFlow
+          onIdentify={handleIdentify}
+          onPassword={handlePassword}
+          onError={setError}
+          theme={theme}
+        />
       )}
 
-      {page === 'signup' && (
-        <>
-          <SignUpForm onSubmit={handleSignUp} />
-          <button onClick={() => { setError(null); setPage('signin') }}>Back to sign in</button>
-        </>
-      )}
+      {page === 'signup' && <SignUpForm onSubmit={handleSignUp} theme={theme} />}
 
       {page === 'forgot' && (
-        <>
-          <ForgotPasswordForm onRequestCode={handleRequestCode} onConfirmReset={handleConfirmReset} />
-          <button onClick={() => { setError(null); setPage('signin') }}>Back to sign in</button>
-        </>
+        <ForgotPasswordForm
+          onRequestCode={handleRequestCode}
+          onConfirmReset={handleConfirmReset}
+          theme={theme}
+        />
       )}
 
       {page === 'verify' && (
@@ -208,11 +242,12 @@ function App() {
           <VerifyEmailNotice
             email={pendingEmail}
             onResend={() => resendConfirmationCode(pendingEmail)}
+            theme={theme}
           />
-          <ConfirmSignUpForm onConfirm={handleConfirmSignUp} />
+          <ConfirmSignUpForm onConfirm={handleConfirmSignUp} theme={theme} />
         </>
       )}
-    </div>
+    </AuthChrome>
   )
 }
 

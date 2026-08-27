@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 9 (Step 7 is ops-owned, not a code session — skipped for now, see its own note)
+**Current step:** 10 (Step 7 is ops-owned, not a code session — skipped for now, see its own note)
 
 ## Context
 
@@ -355,39 +355,52 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 9 — Integration: `packages/auth-site`
 
-> **Correction (2026-08-24, post-Step-8 review):** `packages/ui-auth` no
-> longer ships a `vlinderProfile` builtin — Vlinder-specific branding
-> (colors/logo/tagline) belongs in a separate private repo, not in this
-> shared library, and `AuthChrome`'s own default is now the generic
-> `'default'` profile, not `'vlinder'`. The bullets below still assume a
-> local `vlinderProfile` import and a logo asset fetched directly into this
-> repo — **that mechanism needs to be redesigned before this step starts**
-> (e.g. the private repo could publish an `AuthProfile` object `auth-site`
-> imports as a dependency, or `main.tsx` could accept a profile override via
-> the existing runtime `config.json` mechanism). Whoever picks up Step 9
-> should resolve that design question first rather than reintroducing
-> Vlinder branding into this repo to match the stale text below.
+> **Resolved (2026-08-27):** the profile-source design question raised by
+> the post-Step-8 correction (PR #83) is settled — `auth-site` gets its
+> `AuthProfile` entirely from the existing runtime `config.json` mechanism
+> (`SiteConfig.profile: BuiltinProfileName | AuthProfile`, opaque
+> adopter-owned data, defaulting to `'default'` when absent/malformed). It
+> never depends on `node-vlinder-auth-branding` (the private repo holding
+> `vlinderProfile`) at compile time. That repo now publishes itself privately
+> to GitHub Packages and hosts a minimal, tested demonstration of the
+> injection mechanism (`injectVlinderProfile()`) an adopter's deployment
+> tooling would use to merge it into a base `config.json` — see its README.
+> Wiring an actual deployment (`infra/demo/vlinder_auth`) to do that is a
+> separate, not-yet-started piece of work (tracked outside this plan doc, the
+> same way Step 7 was deferred as ops-owned).
 
-- [ ] Rewrite `main.tsx`'s four page branches (`signin`/`signup`/`forgot`/
-      `verify`) to wrap each form in `<AuthChrome profile={...} banner={...}
-      footer={...}>`, passing `theme={themeFromProfile(profile)}` to the
-      wrapped form(s) — see the correction note above for where `profile`
-      should come from. Preserve all existing handlers unchanged.
+- [x] Rewrite `main.tsx`'s four page branches (`signin`/`signup`/`forgot`/
+      `verify`) to wrap the whole `App()` in a single `<AuthChrome
+      profile={profile} banner={...} footer={...}>`, passing
+      `theme={themeFromProfile(resolveProfile(profile))}` to whichever form(s)
+      are active. `profile` is resolved from `loadConfig()`'s new `profile`
+      field (defaulting to `'default'` before it resolves, matching
+      `adminEnabled`'s existing safe-default pattern). All existing handlers
+      unchanged.
 
-- [ ] Logo asset: see the correction note above — this bullet originally had
-      the logo fetched directly into this repo's `packages/auth-site/public/`,
-      which conflicts with keeping Vlinder branding out of this repo.
-      Resolve alongside the profile-source design question.
+- [x] No logo asset fetch needed — resolved differently than either original
+      candidate: a custom profile's logo already arrives as a self-contained
+      data URI inside the `config.json`-supplied `AuthProfile` object (see
+      `node-vlinder-auth-branding`'s `vlinderProfile.logo`), so there's
+      nothing for `auth-site` to fetch or host.
 
-- [ ] Leave `theme.ts`'s unrelated `defaultVlinderTheme.logoUrl` (pointing at
+- [x] Left `theme.ts`'s unrelated `defaultVlinderTheme.logoUrl` (pointing at
       a separately-missing `/assets/vlinder-logo.svg`) alone.
 
-- [ ] This rewrite clears 4 pre-existing SonarQube findings in `main.tsx`:
-      `role="status"` should be an `<output>` element (`typescript:S6819`,
-      line 182) and three buttons missing an explicit `type` attribute
-      (`typescript:S9011`, lines 187/188/195). Carry the fixes through into
-      whatever replaces those lines (the `banner`/`footer` content moving
-      into `AuthChrome`) rather than leaving them behind.
+- [x] This rewrite fixes the two finding types the original bullet called
+      out in `main.tsx`: `role="status"` → `<output>` (`typescript:S6819`)
+      and explicit `type="button"` on every plain navigation button
+      (`typescript:S9011`, now on all three — `Create account`, `Forgot
+      password?`, `Back to sign in`). Confirm via this step's PR's
+      SonarQube scan that no instance of either pattern remains.
+
+- [x] `config.ts`/`config.test.ts` extended (TDD-first) with the `profile`
+      field: passes through a builtin name or a custom object untouched;
+      defaults to `'default'` when absent or a malformed type.
+
+- [x] Verify: `npm run test --workspaces --if-present` (36 auth-site tests,
+      full workspace suite), `cd e2e && npm test` (dry-run), `npm run lint`,
+      `tsc --noEmit` all pass.
 
 ### Step 10 — BDD: `e2e/`
 
@@ -612,3 +625,25 @@ changes that depend on the same "resolve a secret" capability.
   fewer than Step 8's 37 — collapsed two now-redundant "default profile"
   assertions into one); full `ui-auth` suite, full workspace suite, `e2e`
   dry-run, lint, and `tsc --noEmit` all pass.
+- 2026-08-26: Post-Step-8 correction (PR #83) merged.
+- 2026-08-27: Step 9 — implemented per the "Resolved" note above:
+  `auth-site` reads its `AuthProfile` from `config.json` (new
+  `SiteConfig.profile` field, TDD'd in `config.test.ts` first: passes
+  through a builtin name or a custom object untouched, defaults to
+  `'default'` when absent or malformed), never depending on
+  `node-vlinder-auth-branding` at compile time. `main.tsx` rewritten to wrap
+  `App()` in a single `AuthChrome`, threading
+  `themeFromProfile(resolveProfile(profile))` into whichever form(s) are
+  active; fixed the `role="status"`/missing-button-`type` findings along the
+  way. Companion work in `node-vlinder-auth-branding` (separate repo, its own
+  PR #9): publishes itself privately to GitHub Packages with dual ESM+CJS
+  builds, and adds `injectVlinderProfile()` as a minimal tested demonstration
+  of the config.json-injection mechanism — not a finished adopter tool.
+  **Not done, intentionally deferred:** wiring a real deployment
+  (`infra/demo/vlinder_auth`) to depend on the branding package and actually
+  run the injection is separate, not-yet-started work (same footing as Step
+  7). **Also not done:** Step 8's own cleanup bullet ("once this step and
+  Step 9 both land, delete `design_handoff_auth_chrome/`") is left
+  intentionally unchecked — Step 11 says to eyeball that directory's mockups
+  for visual fidelity *before* deleting it, and Step 11 hasn't run yet. Full
+  workspace test suite, `e2e` dry-run, lint, and `tsc --noEmit` all pass.
