@@ -7,6 +7,7 @@ import { TEST_PASSWORD } from './common.steps'
 When('I sign up with a new email and password', async function (this: AuthWorld) {
   const email = `signup-${Date.now()}-${crypto.randomUUID()}@example.com`
   this.testUser = { email, password: TEST_PASSWORD, userId: '' }
+  this.trackUserForCleanup(email)
 
   await this.page.getByRole('button', { name: 'Create account' }).click()
   await this.page.getByLabel('Email').fill(email)
@@ -45,8 +46,26 @@ When('the account is confirmed', async function (this: AuthWorld) {
   if (!this.testUser) {
     throw new Error('No test user set up for this scenario')
   }
-  await this.confirmSignUp(this.testUser.email)
-  this.testUser.userId = await this.getUserId(this.testUser.email)
+  const email = this.testUser.email
+
+  // The pre-sign-up trigger already auto-confirmed the account in Cognito;
+  // what's actually gating login is this app's own signup code, sent via
+  // SES. e2e has no email-receiving service, so read the pending code
+  // straight out of the table (arrange-phase reach-past-the-app-layer,
+  // same precedent as seedRoleAssignment) and submit it through the real
+  // ConfirmSignUpForm UI.
+  const code = await pollUntil(
+    () => this.getVerificationCode(email, 'signup'),
+    (result) => result !== undefined,
+  )
+  if (!code) {
+    throw new Error(`No signup verification code was ever written for ${email}`)
+  }
+
+  await this.page.getByLabel('Verification code').fill(code)
+  await this.page.getByRole('button', { name: 'Verify' }).click()
+
+  this.testUser.userId = await this.getUserId(email)
 })
 
 Then('the account has the default role assigned', async function (this: AuthWorld) {

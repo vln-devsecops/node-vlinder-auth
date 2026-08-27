@@ -8,6 +8,7 @@ Feature: Sign in
 
   Scenario: Valid credentials sign the user in
     When I visit the auth site
+    And the "Your Company Name" brand panel is visible
     And I sign in with valid credentials
     Then I am redirected to the admin panel
     And the user table is visible
