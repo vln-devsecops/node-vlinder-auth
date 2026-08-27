@@ -17,7 +17,12 @@ describe('loadConfig', () => {
 
     const config = await loadConfig()
 
-    expect(config).toEqual({ userPoolClientId: 'abc123', multiTenant: false, adminEnabled: true })
+    expect(config).toEqual({
+      userPoolClientId: 'abc123',
+      multiTenant: false,
+      adminEnabled: true,
+      profile: 'default',
+    })
   })
 
   it('defaults adminEnabled to true when the field is absent (older config.json)', async () => {
@@ -63,5 +68,54 @@ describe('loadConfig', () => {
     )
 
     await expect(loadConfig()).rejects.toThrow('Failed to load /config.json: 404')
+  })
+
+  it('defaults profile to "default" when the field is absent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false }),
+      }),
+    )
+
+    expect((await loadConfig()).profile).toBe('default')
+  })
+
+  it('defaults profile to "default" when the field is a malformed type', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false, profile: 42 }),
+      }),
+    )
+
+    expect((await loadConfig()).profile).toBe('default')
+  })
+
+  it('passes through a builtin profile name', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false, profile: 'default' }),
+      }),
+    )
+
+    expect((await loadConfig()).profile).toBe('default')
+  })
+
+  it('passes through a custom AuthProfile object untouched', async () => {
+    const customProfile = { name: 'acme', companyName: 'Acme Corp' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ userPoolClientId: 'abc123', multiTenant: false, profile: customProfile }),
+      }),
+    )
+
+    expect((await loadConfig()).profile).toEqual(customProfile)
   })
 })
