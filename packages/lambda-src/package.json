@@ -24,7 +24,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1116.0",
     "@aws-sdk/client-sesv2": "^3.1116.0",
     "@aws-sdk/lib-dynamodb": "^3.1089.0",
-    "jose": "^6.2.9"
+    "jose": "^6.2.10"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.146",
