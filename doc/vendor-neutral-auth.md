@@ -145,6 +145,35 @@ origin gets tokens. This is the slim authorization-server surface.
   returns the **Cognito-signed, OIDC-valid** `{ access, id, refresh, expiresAt }`.
   The BFF holds these and sets its own httpOnly cookie on its origin.
 
+Unlike the admin panel (below), the RP's browser is never handed a bearer
+token in any form — the `/token` exchange happens entirely server-to-server
+between the RP's BFF and the auth Lambda, out of the browser's reach:
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant RPBff as RP's BFF (app.example.com backend)
+    participant AuthSPA as auth.<zone> login UI
+    participant Auth as auth-api Lambda
+
+    Browser->>RPBff: GET /login
+    RPBff-->>Browser: 302 auth.<zone>/api/v1/auth/authorize?client_id=...<br/>&redirect_uri=...&state=...&code_challenge=...
+
+    Browser->>AuthSPA: GET /authorize?... (cross-origin navigation)
+    AuthSPA-->>Browser: renders branded login UI
+    Note over Browser,Auth: identify/password exchange (same mechanics as<br/>the admin panel's own vln_auth_session cookie),<br/>establishing SSO on auth.<zone>
+    Auth->>Auth: mint one-time code bound to<br/>(user, redirect_uri, code_challenge)
+    Auth-->>Browser: 302 redirect_uri?code=...&state=...
+
+    Browser->>RPBff: GET redirect_uri?code=...&state=...<br/>(back on the RP's own origin)
+    RPBff->>Auth: POST /api/v1/auth/token {code, code_verifier, client_secret?}<br/>(server-to-server -- the browser never sees this call)
+    Auth-->>RPBff: {access, id, refresh, expiresAt}<br/>(Cognito-signed, OIDC-valid)
+
+    RPBff-->>Browser: Set-Cookie: <RP's own session><br/>(HttpOnly, on app.example.com's own origin)
+
+    Note over Browser: The RP's browser JS never receives the<br/>access/id/refresh tokens in any form.
+```
+
 **Layer 2 — login-UI-facing (our SPA on `auth.<zone>`).** What `/authorize`
 drives; the browser only ever talks to these same-origin.
 
@@ -437,3 +466,51 @@ app deliberately, unaffected by how the app itself authenticates).
   arrive with meaningful access; elevation is always a deliberate admin action.
   (Invite-only / pre-provision-only remains a possible later per-provider opt-in,
   not built now.)
+- **Proposed, not yet settled: sudo step-up for `elevated` roles.** The
+  `RoleActivation = 'default' | 'elevated'` split (`shared/types.ts`) already
+  gates login-time privileges — `shared/privileges.ts`'s
+  `resolvePrivilegesForUser` unions only `default`-activation roles into the
+  claims the pre-token-generation trigger writes, and `admin-api`'s
+  `assignRole` already grants newly-added roles as `elevated` by default (held
+  for a future step-up, not active at login). What's still missing is the
+  mechanism that lets a user actually *exercise* a role they hold as
+  `elevated`. Sketch, to refine when this is built:
+  - **ID token carries the full entitlement; access token keeps today's active
+    subset.** The pre-token-generation trigger already runs on event version
+    `V2_0`, which supports independent `idTokenGeneration` /
+    `accessTokenGeneration` claim overrides — today's handler doesn't use that
+    split; it builds one `claims` object and assigns it to both. Add a second,
+    unfiltered privilege resolution (every held role, regardless of
+    `activation`) alongside the existing `default`-only one, and put it only
+    on the ID token's `permissions` claim; leave the access token's
+    `default`-only behavior unchanged.
+  - **A `/sudo` endpoint on `auth-api`** that trades the caller's current
+    session for one that also activates a specific held-but-`elevated`
+    privilege or role — re-checked against `user_role_assignments` at request
+    time (the caller must actually hold it; this activates a grant, it
+    doesn't create one) before minting the wider token.
+  - **The UI can't read either token to learn this itself.** Per the BFF /
+    httpOnly decisions above, the admin panel never sees raw tokens — its only
+    client-side state today is an expiry marker (`session.ts`). So the ID
+    token's superset claim is only useful once something server-side exposes
+    it as data: a `/whoami`-style endpoint returning
+    `{ active: [...], held: [...] }` (`active` = today's `permissions` claim,
+    `held` = the superset minus `active`) is the natural shape — called once
+    on load and again after a successful `/sudo` call.
+  - **A UI-side helper wraps privileged calls**: given a required privilege,
+    check it against the last `/whoami` response; if already `active`, call
+    the real endpoint directly; if only `held`, prompt the user to escalate,
+    call `/sudo`, refresh `/whoami`, then proceed — so individual call sites
+    never hand-roll the active/held check.
+
+  Open sub-questions, deliberately not decided here: does `/sudo` require
+  re-proving identity (password re-entry — a real step-up) or just an
+  explicit UI confirmation of intent; what the elevated session's
+  lifetime/scope is (reverts after N minutes? one action? tab close?);
+  whether elevation grants a whole role's privileges or one privilege at a
+  time; and whether the elevated token replaces the AS session cookie
+  outright or layers alongside it. This resolves the forward references
+  already sitting in `doc/use-cases/README.md` and
+  `doc/use-cases/admin/role-management.feature` ("see
+  doc/vendor-neutral-auth.md" for the step-up mechanism), which pointed here
+  before this section existed.

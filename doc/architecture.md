@@ -72,6 +72,48 @@ share that prefix; `/api/v1/auth*` is a higher-precedence behavior than
   provisioned when `create_admin_panel = true` (the default). A CloudFront
   Function strips the `/api/v1` prefix.
 
+### Admin panel token flow
+
+The admin panel never holds or exchanges a bearer token itself — the browser's
+only session token is the `vln_auth_session` `HttpOnly` cookie (literally the
+raw Cognito access token as its value, per `session.ts`/`handlers/password.ts`),
+which JS can never read. Each request, the `admin_api_rewrite` CloudFront
+Function lifts that cookie into an `Authorization: Bearer` header at the edge —
+see `modules/aws/vlinder_auth/templates/admin_api_rewrite.js` — so the API
+Gateway JWT authorizer sees ordinary bearer-token semantics unchanged. There is
+no separate exchange step and no distinct ID token in play here at all.
+
+```mermaid
+sequenceDiagram
+    participant Browser as Browser (admin panel SPA)
+    participant CF as CloudFront Functions
+    participant Auth as auth-api Lambda
+    participant Cognito
+    participant APIGW as API Gateway (JWT authorizer)
+    participant Admin as admin-api Lambda
+
+    Browser->>CF: POST /api/v1/auth/identify {identifier}
+    CF->>Auth: POST /identify (auth_api_rewrite strips /api/v1)
+    Auth-->>Browser: 200 {method}<br/>Set-Cookie: vln_auth_identify (HttpOnly)
+
+    Browser->>CF: POST /api/v1/auth/password {password}<br/>Cookie: vln_auth_identify
+    CF->>Auth: POST /password
+    Auth->>Cognito: AdminInitiateAuth
+    Cognito-->>Auth: {accessToken, idToken, refreshToken, expiresAt}
+    Auth-->>Browser: 200 {expiresAt}<br/>Set-Cookie: vln_auth_session=accessToken<br/>(HttpOnly, Path=/, SameSite=Strict)
+
+    Note over Browser: JS never reads either cookie --<br/>only expiresAt (from the response body)<br/>is kept, to drive the redirect guard.
+
+    Browser->>CF: GET /api/v1/users<br/>Cookie: vln_auth_session (sent automatically)
+    activate CF
+    Note over CF: admin_api_rewrite: strip /api/v1,<br/>lift vln_auth_session into<br/>Authorization: Bearer accessToken
+    CF->>APIGW: GET /users<br/>Authorization: Bearer accessToken
+    deactivate CF
+    APIGW->>APIGW: validate JWT (issuer/JWKS)
+    APIGW->>Admin: invoke, verified claims on context
+    Admin-->>Browser: 200 {users: [...]}
+```
+
 The SPA's built assets **are** managed by Terraform, so `terraform apply` alone
 yields a working site — the complete solution is a single deployable template.
 The prebuilt bundle is published to GitHub Packages as `@vln-devsecops/auth-site`
