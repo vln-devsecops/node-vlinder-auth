@@ -435,6 +435,44 @@ app deliberately, unaffected by how the app itself authenticates).
   - The **admin panel** is the one same-origin consumer and skips the BFF: it
     rides the AS session cookie directly (its API authorizer reads that cookie —
     see next item).
+- **Correction (rlc): the front-end drives the redirect itself, and the BFF
+  hands the resulting access token back down to it.** Revises the bullet
+  above on two points, worked out against a concrete scenario (a client app
+  with no federation, front-end clicks "login" and drives the whole
+  exchange):
+  1. **The front-end itself navigates to `/authorize`** (a public PKCE
+     client: it generates `code_verifier`/`code_challenge` and holds
+     `code_verifier` client-side across the redirect round trip), not the
+     BFF. This drops the "requires a server-side component to *initiate*
+     login" constraint above, though the BFF still does the actual token
+     exchange (next point) — see the flagged follow-up below for what it
+     would take to drop the BFF requirement entirely.
+  2. **After the one-time code redirects back to the front-end's own
+     callback route**, the front-end reads `code`/`state` from the URL and
+     sends them plus its stored `code_verifier` to *its own* BFF (not
+     directly to `/token` — the BFF is still the one calling
+     `POST /api/v1/auth/token` server-to-server, unchanged). The BFF keeps
+     the long-lived `refresh` token server-side, but **hands the `access`
+     token back down to the front-end** for it to hold in memory and use as
+     its own `Authorization: Bearer` header against the client app's
+     backend — reversing "no token touches browser JS on either origin"
+     for this token specifically. On expiry, the front-end calls back into
+     its own BFF, which redeems the server-held refresh token
+     (`POST /api/v1/auth/refresh`) and hands down a fresh access token,
+     rather than the front-end ever repeating the full interactive redirect.
+
+  This is **Cognito's real, unmodified access token** (decision: rlc — not a
+  token the BFF mints itself), so an RP backend validates it directly against
+  Cognito's JWKS. For this phase that means RPs point their validator at
+  Cognito's actual issuer (`https://cognito-idp.<region>.amazonaws.com/
+  <userPoolId>`); `auth.<zone>/.well-known/jwks.json` mirrors/proxies that
+  same JWKS for convenience, but doesn't change what's inside the token.
+  Explicitly **not** about hiding that Cognito is behind this — RP backends
+  knowing the issuer is Cognito is fine. The cost is that every RP is now
+  wired to Cognito's specific, non-relocatable issuer identity, which is the
+  opposite of portable if the engine is ever swapped — tracked as deferred
+  follow-up work, not this phase: see
+  `doc/follow-ups/self-issued-tokens.md`.
 - **Admin API authorizer: reads the AS session cookie (settled); its issuer
   moving with the IdP stays acknowledged.** The admin panel is the same-origin
   consumer, so its API swaps the API-Gateway JWT authorizer for a **Lambda
