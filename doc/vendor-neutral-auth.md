@@ -435,43 +435,89 @@ app deliberately, unaffected by how the app itself authenticates).
   - The **admin panel** is the one same-origin consumer and skips the BFF: it
     rides the AS session cookie directly (its API authorizer reads that cookie —
     see next item).
-- **Correction (rlc): the front-end drives the redirect itself, and the BFF
-  hands the resulting access token back down to it.** Revises the bullet
-  above on two points, worked out against a concrete scenario (a client app
-  with no federation, front-end clicks "login" and drives the whole
-  exchange):
-  1. **The front-end itself navigates to `/authorize`** (a public PKCE
-     client: it generates `code_verifier`/`code_challenge` and holds
-     `code_verifier` client-side across the redirect round trip), not the
-     BFF. This drops the "requires a server-side component to *initiate*
-     login" constraint above, though the BFF still does the actual token
-     exchange (next point) — see the flagged follow-up below for what it
-     would take to drop the BFF requirement entirely.
-  2. **After the one-time code redirects back to the front-end's own
-     callback route**, the front-end reads `code`/`state` from the URL and
-     sends them plus its stored `code_verifier` to *its own* BFF (not
-     directly to `/token` — the BFF is still the one calling
-     `POST /api/v1/auth/token` server-to-server, unchanged). The BFF keeps
-     the long-lived `refresh` token server-side, but **hands the `access`
-     token back down to the front-end** for it to hold in memory and use as
-     its own `Authorization: Bearer` header against the client app's
-     backend — reversing "no token touches browser JS on either origin"
-     for this token specifically. On expiry, the front-end calls back into
-     its own BFF, which redeems the server-held refresh token
-     (`POST /api/v1/auth/refresh`) and hands down a fresh access token,
-     rather than the front-end ever repeating the full interactive redirect.
+- **Correction (rlc): the client app's own back-end drives the redirect (the
+  front-end just navigates to it), and the BFF hands the resulting access
+  token back down to the front-end.** Revises the bullet above, worked out
+  against a concrete scenario (a client app with no federation, front-end
+  clicks "login"). Full worked example: a Gherkin scenario for this lives in
+  this repo's authoring workspace, kept separate from this doc for now.
+  1. **The front-end navigates to a same-origin route on its own app**
+     (e.g. `app.domain/login`) — it never generates or holds PKCE material
+     itself. That route is served by **the client app's own back-end**,
+     which is the one acting as the (confidential) OAuth client: it mints
+     `code_verifier` and `code_challenge = BASE64URL(SHA256(code_verifier))`
+     (note the base64url encoding — a raw digest won't validate against a
+     standard `/authorize` implementation), encrypts `code_verifier` plus a
+     timestamp into a JWE used as the `state` parameter (JWE, not JWS —
+     `code_verifier` needs *confidentiality*, not just tamper-evidence,
+     since `state` round-trips through browser history/redirects, exactly
+     the interception surface PKCE exists to defend against), and
+     `302`-redirects the browser to `/authorize` with `client_id`,
+     `redirect_uri`, `response_type=code`, `scope`, `state`,
+     `code_challenge`, and **`code_challenge_method=S256`** (easy to omit;
+     without it PKCE is ambiguous and some implementations default to the
+     unsafe `plain` method).
+  2. **The identify-session cookie carries the pending request forward.**
+     This isn't new ground — it's exactly what the signed-JWS bullet above
+     already anticipated ("carries... PKCE/state for the authorize step"),
+     just made concrete: the existing `vln_auth_identify` JWS payload is
+     extended to also hold `redirect_uri`, `code_challenge`, and the
+     incoming `state` value across the identify → password steps, so
+     nothing needs a server-side lookup to recall them.
+  3. **On successful password validation**, the auth service reads
+     `redirect_uri`/`code_challenge` back out of the identify-session JWS
+     (self-contained, no lookup) and mints an **opaque one-time token**:
+     `JWE({user, redirect_uri, code_challenge, timestamp})`. Deliberately
+     *not* tracked server-side for single-use enforcement (decision: rlc) —
+     the only party that can redeem it is whoever holds the matching
+     `code_verifier`, which never left the client app's own back-end, so
+     there's no external replay threat to defend against; the sole party
+     capable of replaying it has no incentive to. It `302`s back to
+     `redirect_uri?code=<token>&state=<the same state value, echoed back
+     verbatim>`.
+  4. **The client app's back-end extracts `code` and `state`** from its own
+     callback route, decrypts `state` to recover `code_verifier`, and
+     `POST`s `{code, code_verifier}` to `/api/v1/auth/token` — no need to
+     also resend `redirect_uri` separately; it's already bound inside the
+     encrypted `code` itself, which sidesteps the usual reason OAuth token
+     requests repeat it (a plain opaque authorization code has no other way
+     to recall its bound params; a self-describing encrypted one does). The
+     auth service decrypts the token, confirms
+     `BASE64URL(SHA256(code_verifier))` matches the embedded
+     `code_challenge`, checks it hasn't expired, and returns Cognito's real
+     access token plus a **JWE-wrapped refresh token** (see below).
+  5. **The client app's back-end (BFF) sets that JWE-wrapped refresh token
+     as its own `HttpOnly` cookie on its own origin**, unmodified — it's
+     opaque to the BFF, which never decrypts it and holds no encryption key
+     of its own. This needs zero server-side session storage yet never
+     exposes the refresh token to browser JS, which is the property "no
+     token touches browser JS on either origin" was protecting in the first
+     place — kept intact for the long-lived token specifically, even though
+     it's relaxed for the access token (next point). On refresh, the BFF
+     reads its own cookie and forwards the still-opaque value unmodified to
+     `POST /api/v1/auth/refresh`; the auth service (and only the auth
+     service) decrypts it, calls Cognito, and returns a fresh access token
+     plus a newly-encrypted, **rotated** refresh token for the BFF to
+     re-cookie — pairing this with Cognito's refresh-token rotation +
+     reuse-detection bounds a stolen refresh-token cookie to a single race
+     rather than unlimited use for its full lifetime.
+  6. The BFF hands the **plain `access` token back down to the front-end**
+     for it to hold in memory and use as its own `Authorization: Bearer`
+     header against the client app's backend — reversing "no token touches
+     browser JS on either origin" for this token specifically, not the
+     refresh token.
 
-  This is **Cognito's real, unmodified access token** (decision: rlc — not a
-  token the BFF mints itself), so an RP backend validates it directly against
-  Cognito's JWKS. For this phase that means RPs point their validator at
-  Cognito's actual issuer (`https://cognito-idp.<region>.amazonaws.com/
-  <userPoolId>`); `auth.<zone>/.well-known/jwks.json` mirrors/proxies that
-  same JWKS for convenience, but doesn't change what's inside the token.
-  Explicitly **not** about hiding that Cognito is behind this — RP backends
-  knowing the issuer is Cognito is fine. The cost is that every RP is now
-  wired to Cognito's specific, non-relocatable issuer identity, which is the
-  opposite of portable if the engine is ever swapped — tracked as deferred
-  follow-up work, not this phase: see
+  The access token is **Cognito's real, unmodified token** (decision: rlc —
+  not a token the BFF mints itself), so an RP backend validates it directly
+  against Cognito's JWKS. For this phase that means RPs point their
+  validator at Cognito's actual issuer (`https://cognito-idp.<region>
+  .amazonaws.com/<userPoolId>`); `auth.<zone>/.well-known/jwks.json`
+  mirrors/proxies that same JWKS for convenience, but doesn't change what's
+  inside the token. Explicitly **not** about hiding that Cognito is behind
+  this — RP backends knowing the issuer is Cognito is fine. The cost is that
+  every RP is now wired to Cognito's specific, non-relocatable issuer
+  identity, which is the opposite of portable if the engine is ever swapped
+  — tracked as deferred follow-up work, not this phase: see
   `doc/follow-ups/self-issued-tokens.md`.
 - **Admin API authorizer: reads the AS session cookie (settled); its issuer
   moving with the IdP stays acknowledged.** The admin panel is the same-origin
