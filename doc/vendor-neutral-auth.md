@@ -485,7 +485,8 @@ app deliberately, unaffected by how the app itself authenticates).
      auth service decrypts the token, confirms
      `BASE64URL(SHA256(code_verifier))` matches the embedded
      `code_challenge`, checks it hasn't expired, and returns Cognito's real
-     access token plus a **JWE-wrapped refresh token** (see below).
+     access token, its accompanying **ID token**, plus a **JWE-wrapped
+     refresh token** (see below).
   5. **The client app's back-end (BFF) sets that JWE-wrapped refresh token
      as its own `HttpOnly` cookie on its own origin**, unmodified — it's
      opaque to the BFF, which never decrypts it and holds no encryption key
@@ -506,6 +507,18 @@ app deliberately, unaffected by how the app itself authenticates).
      header against the client app's backend — reversing "no token touches
      browser JS on either origin" for this token specifically, not the
      refresh token.
+  7. **The ID token carries more than the access token does — that gap is
+     the sudo mechanism, not a bug.** The access token only carries the
+     caller's `default`-activation privileges; the ID token from the same
+     `/token` response carries the full entitlement, including privileges
+     held as `elevated` (see "Proposed, not yet settled: sudo step-up"
+     below — described separately, not fully specified here). The extra
+     scopes become usable by calling a **sudo endpoint the BFF itself
+     exposes to its front-end** (e.g. `POST app.domain/login/sudo`,
+     mirroring the `.../login/refresh` shape above), which the BFF forwards
+     to the auth service's real step-up mechanism server-to-server — the
+     front-end never sees the ID token directly, same reasoning as every
+     other token in this flow.
 
   **Front-end note, easy to get wrong given rotation:** every consuming
   app's front-end must coalesce concurrent `401`-triggered refresh attempts
@@ -586,7 +599,12 @@ app deliberately, unaffected by how the app itself authenticates).
     session for one that also activates a specific held-but-`elevated`
     privilege or role — re-checked against `user_role_assignments` at request
     time (the caller must actually hold it; this activates a grant, it
-    doesn't create one) before minting the wider token.
+    doesn't create one) before minting the wider token. For a BFF-backed RP
+    (see the Layer-1 correction above), the front-end never calls this
+    directly — it calls a sudo endpoint its *own* BFF exposes, which forwards
+    to this one server-to-server, the same shape as the refresh endpoint.
+    The admin panel (no BFF, same-origin) remains the one case that could
+    call it directly.
   - **The UI can't read either token to learn this itself.** Per the BFF /
     httpOnly decisions above, the admin panel never sees raw tokens — its only
     client-side state today is an expiry marker (`session.ts`). So the ID
