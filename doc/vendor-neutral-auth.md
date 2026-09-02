@@ -546,6 +546,20 @@ app deliberately, unaffected by how the app itself authenticates).
   identity, which is the opposite of portable if the engine is ever swapped
   — tracked as deferred follow-up work, not this phase: see
   `doc/follow-ups/self-issued-tokens.md`.
+
+  **Mandatory validation detail, not optional hygiene here: check
+  `token_use === "access"` and reject anything else.** Cognito's access and
+  ID tokens are both JWTs signed by the same key, so a validator that only
+  checks signature/issuer/expiry can't tell them apart — only the
+  `token_use` claim does. This matters more than usual in this design
+  specifically: the ID token deliberately carries the *superset* of
+  privileges, including ones held as `elevated` (point 7 above; see the
+  sudo step-up sketch below). A resource server that accepts an ID token
+  anywhere it expects a bearer access token would let a caller skip the
+  sudo step-up entirely and walk in with elevated privileges already
+  active — this is a privilege-escalation hole specifically created by our
+  own choice to widen the ID token, not a generic OAuth footgun, so it
+  isn't optional for RP backends to get right.
 - **Admin API authorizer: reads the AS session cookie (settled); its issuer
   moving with the IdP stays acknowledged.** The admin panel is the same-origin
   consumer, so its API swaps the API-Gateway JWT authorizer for a **Lambda
