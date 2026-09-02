@@ -514,17 +514,19 @@ app deliberately, unaffected by how the app itself authenticates).
      held as `elevated` (see "Proposed, not yet settled: sudo step-up"
      below — described separately, not fully specified here). The extra
      scopes become usable by calling a **sudo endpoint the BFF itself
-     exposes to its front-end** (e.g. `POST app.domain/login/sudo`,
-     mirroring the `.../login/refresh` shape above), which the BFF forwards
-     to the auth service's real step-up mechanism server-to-server — the
-     front-end never sees the ID token directly, same reasoning as every
-     other token in this flow.
+     exposes to its front-end** (e.g. `POST app.domain/api/v1/auth/sudo`,
+     mirroring the `.../api/v1/auth/refresh` shape above — the BFF's own
+     routes sit behind the same `/api/v1/auth/` prefix convention
+     `auth.<zone>` itself uses), which the BFF forwards to the auth
+     service's real step-up mechanism server-to-server — the front-end
+     never sees the ID token directly, same reasoning as every other token
+     in this flow.
 
   **Front-end note, easy to get wrong given rotation:** every consuming
   app's front-end must coalesce concurrent `401`-triggered refresh attempts
   into a **single in-flight refresh call** (e.g. an axios interceptor that
-  queues/shares one in-flight `POST .../login/refresh` promise across all
-  callers, rather than firing one per failed request). Because refresh
+  queues/shares one in-flight `POST .../api/v1/auth/refresh` promise across
+  all callers, rather than firing one per failed request). Because refresh
   tokens rotate, several parallel API calls hitting `401` at once and each
   independently calling refresh would race — the second caller presents an
   already-superseded refresh token, which is exactly what Cognito's
@@ -533,6 +535,20 @@ app deliberately, unaffected by how the app itself authenticates).
   that revokes the whole token family and forces a real user to fully
   re-login. This is a front-end implementation detail, not something the
   BFF or auth service can enforce from their side.
+
+  **Logout must revoke, not just forget.** The front-end calls its own
+  `POST app.domain/api/v1/auth/logout` (a plain `fetch`, no navigation —
+  nothing about logout needs the cross-origin redirect/PKCE machinery login
+  does). The BFF forwards its still-opaque refresh-token cookie value,
+  unmodified, to `auth.<zone>`'s own logout endpoint, which decrypts it and
+  calls Cognito's `RevokeToken` on the real refresh token *before* the BFF
+  clears its local cookie — clearing the cookie alone only forgets the
+  BFF's own copy and leaves the underlying Cognito refresh token valid
+  until it naturally expires, which matters if a copy of it was ever
+  exposed some other way (a backup, a log). Whether this also ends the
+  `auth.<zone>` AS session (and therefore SSO for the user's other apps) or
+  stays scoped to this one app is a separate, deliberately-parameterized
+  decision — covered in its own scenario, not resolved here.
 
   The access token is **Cognito's real, unmodified token** (decision: rlc —
   not a token the BFF mints itself), so an RP backend validates it directly
