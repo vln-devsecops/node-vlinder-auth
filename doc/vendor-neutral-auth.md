@@ -583,24 +583,26 @@ app deliberately, unaffected by how the app itself authenticates).
     other tabs, not just our apps — a far bigger blast radius than intended,
     and return-redirect support afterward varies by provider and isn't
     something we control.
-  - **Mitigation instead: `prompt=login` on the federated `/authorize`
-    redirect to the IdP.** This is the standard OIDC parameter for forcing
-    re-authentication without a full external sign-out — it asks the IdP to
-    re-confirm the user's credentials for *this* authorization request only,
-    leaving the IdP's own broader session (Gmail, etc.) untouched. Needs
-    verification before relying on it: OIDC only says the OP "SHOULD"
-    honor it, not "MUST," and Google's actual behavior may fall short of a
-    true password re-prompt (e.g. an account-chooser click-through, if the
-    browser is already signed in at the OS/browser level) — confirm against
-    Google's current behavior before treating this as closing the gap.
-    Open question, not yet decided: apply `prompt=login` on **every**
-    federated login (simplest — no new state, and our own AS-session cookie
-    already provides cross-app SSO convenience without leaning on the IdP's,
-    so the cost may be smaller than it first looks), or only immediately
-    after an explicit "logout everywhere" (preserves the IdP's own SSO
-    convenience for ordinary logins, at the cost of a short-lived
-    per-user marker `auth.<zone>` has to track — the one piece of new
-    server-side state this whole flow would otherwise avoid).
+  - **Verified: no narrowly-scoped protocol lever exists for Google, so this
+    gap is accepted, not mitigated.** `prompt=login` was the candidate
+    considered — the standard OIDC parameter for forcing re-authentication
+    on one authorization request without a full external sign-out — but
+    Google's own documentation lists exactly three supported `prompt`
+    values: `none`, `consent`, `select_account`. `login` isn't one of them
+    and isn't documented to do anything. The OIDC fallback for the same
+    goal, `max_age=0`, doesn't help either: Google (along with Facebook) is
+    a documented case of an OP that doesn't correctly implement `max_age`.
+    So there is no clean way to make Google re-check credentials for a
+    single request while leaving its broader session untouched — the only
+    lever that actually works is the full external-logout redirect already
+    considered and set aside above for its costs (signs the user out of
+    Google **entirely**, needs a real top-level navigation, no controlled
+    return). Given neither option is good, the federation gap for `logout
+    everywhere` is being left as a **documented, accepted limitation** —
+    revisit only if the full-external-logout tradeoff is reconsidered
+    acceptable later. (Verified against Google's own OpenID Connect docs and
+    corroborating reports on Google/Facebook's `max_age` non-compliance;
+    reconfirm if this becomes load-bearing, since IdP behavior can change.)
   - **`auth.<zone>` must defend its own login UI against the same framing
     attack noted above for external IdPs.** We host our own branded login
     pages instead of using Cognito's Hosted UI specifically so we control
