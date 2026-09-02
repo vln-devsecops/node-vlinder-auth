@@ -507,6 +507,20 @@ app deliberately, unaffected by how the app itself authenticates).
      browser JS on either origin" for this token specifically, not the
      refresh token.
 
+  **Front-end note, easy to get wrong given rotation:** every consuming
+  app's front-end must coalesce concurrent `401`-triggered refresh attempts
+  into a **single in-flight refresh call** (e.g. an axios interceptor that
+  queues/shares one in-flight `POST .../login/refresh` promise across all
+  callers, rather than firing one per failed request). Because refresh
+  tokens rotate, several parallel API calls hitting `401` at once and each
+  independently calling refresh would race — the second caller presents an
+  already-superseded refresh token, which is exactly what Cognito's
+  reuse-detection is built to catch, except here it's a false positive
+  (legitimate concurrent requests from the same browser, not an attacker)
+  that revokes the whole token family and forces a real user to fully
+  re-login. This is a front-end implementation detail, not something the
+  BFF or auth service can enforce from their side.
+
   The access token is **Cognito's real, unmodified token** (decision: rlc —
   not a token the BFF mints itself), so an RP backend validates it directly
   against Cognito's JWKS. For this phase that means RPs point their
