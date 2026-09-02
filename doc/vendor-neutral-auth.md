@@ -708,21 +708,65 @@ app deliberately, unaffected by how the app itself authenticates).
     it as data: a `/whoami`-style endpoint returning
     `{ active: [...], held: [...] }` (`active` = today's `permissions` claim,
     `held` = the superset minus `active`) is the natural shape — called once
-    on load and again after a successful `/sudo` call.
+    on load and again after a successful `/sudo` call. **Resolved: this
+    re-derives fresh from `user_role_assignments` every time**, the same way
+    a BFF-backed RP's `/refresh`/`/sudo` calls work — forward the opaque
+    refresh-token cookie, `auth.<zone>` decrypts it for the user's identity
+    and re-runs the (unfiltered) DB lookup right there. The ID token's
+    superset claim is real and does reach the BFF via `/token`, but nothing
+    in this mechanism needs to cache or re-parse it — it's available for any
+    consumer that wants to read it directly, not load-bearing for `/whoami`
+    itself.
   - **A UI-side helper wraps privileged calls**: given a required privilege,
     check it against the last `/whoami` response; if already `active`, call
     the real endpoint directly; if only `held`, prompt the user to escalate,
     call `/sudo`, refresh `/whoami`, then proceed — so individual call sites
-    never hand-roll the active/held check.
+    never hand-roll the active/held check. **The reactive path (a resource
+    server's `403` rather than a proactive `/whoami` check) needs the same
+    signal, explicitly**: a resource server rejecting a call for missing an
+    elevatable privilege should say so in the body (e.g.
+    `{ error: "insufficient_privilege", privilege: "orders:refund",
+    escalatable: true }`) rather than the front-end guessing whether *any*
+    `403` might be sudo-fixable — plenty aren't (ownership checks, rate
+    limits, privileges that were never held at all).
 
-  Open sub-questions, deliberately not decided here: does `/sudo` require
-  re-proving identity (password re-entry — a real step-up) or just an
-  explicit UI confirmation of intent; what the elevated session's
-  lifetime/scope is (reverts after N minutes? one action? tab close?);
-  whether elevation grants a whole role's privileges or one privilege at a
-  time; and whether the elevated token replaces the AS session cookie
-  outright or layers alongside it. This resolves the forward references
-  already sitting in `doc/use-cases/README.md` and
-  `doc/use-cases/admin/role-management.feature` ("see
-  doc/vendor-neutral-auth.md" for the step-up mechanism), which pointed here
-  before this section existed.
+  **Resolved: does `/sudo` require re-proving identity or just a UI
+  confirmation — it depends on how the session authenticated, and that
+  itself has to be tracked.** For a **local** (Cognito-native) login, `/sudo`
+  requires a real password re-entry — but per the token-exchange correction
+  above, that entry can't happen in the client app's own front-end (the
+  entire point of owning our login UI is that a user's real password never
+  passes through arbitrary third-party RP frontends). It has to be a genuine
+  `auth.<zone>`-hosted interaction, structurally a small version of the
+  login redirect itself: the client app's back-end mints its own
+  `code_verifier`/`code_challenge`/`state` the same way, redirects to
+  `auth.<zone>` naming the target privilege, `auth.<zone>` presents its own
+  real password form (not a modal iframe — its login pages already refuse
+  to be framed), validates the password and the privilege grant, and
+  redirects back with a one-time token the BFF exchanges for a freshly
+  elevated access token. For a **federated** login, this degrades to a
+  UI-confirmation-only step (safe to do in-app, since no credential is being
+  collected) — because, per the verified Google finding above, there is no
+  way to force a re-authentication at an external IdP for a single request.
+  This means `auth.<zone>` has to know which case it's in: the AS session
+  needs a new `authMethod: 'local' | 'federated'` field (set at
+  password-validation or federation-callback success), since this is a
+  property of *how this session authenticated*, not a fixed fact about the
+  user's account (a user could plausibly have both a local password and a
+  linked Google identity).
+
+  **Resolved: elevated session lifetime.** Elevation is a property of the
+  *one access token* `/sudo` mints, not something that persists across the
+  refresh-token-backed session. The very next `/refresh` call reverts to a
+  normal, `default`-only access token — no special shorter TTL or explicit
+  revocation needed, since ordinary expiry-and-refresh already reverts it
+  for free. Re-exercising the privilege after that requires another
+  explicit `/sudo` call.
+
+  Still open, not decided here: whether elevation grants a whole role's
+  privileges or one privilege at a time; and whether the elevated token
+  replaces the AS session cookie outright or layers alongside it. This
+  resolves the forward references already sitting in
+  `doc/use-cases/README.md` and `doc/use-cases/admin/role-management.feature`
+  ("see doc/vendor-neutral-auth.md" for the step-up mechanism), which
+  pointed here before this section existed.
