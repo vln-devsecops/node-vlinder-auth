@@ -755,18 +755,33 @@ app deliberately, unaffected by how the app itself authenticates).
   user's account (a user could plausibly have both a local password and a
   linked Google identity).
 
-  **Resolved: elevated session lifetime.** Elevation is a property of the
-  *one access token* `/sudo` mints, not something that persists across the
-  refresh-token-backed session. The very next `/refresh` call reverts to a
-  normal, `default`-only access token — no special shorter TTL or explicit
-  revocation needed, since ordinary expiry-and-refresh already reverts it
-  for free. Re-exercising the privilege after that requires another
-  explicit `/sudo` call.
+  **Resolved: elevated session lifetime, and per-privilege not per-role.**
+  Elevation data lives *inside the refresh token's own encrypted payload*,
+  not just the one access token `/sudo` mints — refresh tokens already
+  rotate on every `/refresh` (for the reuse-detection reasons above), so
+  this reuses that existing hook rather than adding new infrastructure.
+  On a successful `/sudo`, the freshly-rotated refresh token gains an
+  `elevatedGrants` list, one entry per privilege:
+  `[{ privilege: "refund:acme-corp:orders/*", expiresAt: <epoch seconds> }]`
+  — **per-privilege, not per-role**, since a decay policy only makes sense
+  at the granularity of the thing being decayed. Considered a per-privilege
+  refresh countdown instead of a wall-clock `expiresAt`; rejected because it
+  ties survival to *how often the client happens to refresh* rather than
+  actual elapsed time — a busier session would burn through its countdown
+  faster than an idle one, backwards from what "good for 20 minutes" should
+  mean. Every `/refresh` call: `auth.<zone>` decrypts the token, drops any
+  `elevatedGrants` entry whose `expiresAt` has passed, computes the fresh
+  access token's `permissions` as `default ∪ (still-alive elevated grants)`,
+  and carries the (possibly trimmed) list forward into the next rotated
+  refresh token — reverting silently, no error, no explicit revocation
+  step. A repeat `/sudo` call for an already-elevated privilege just resets
+  its `expiresAt` rather than stacking. (Privilege string shape —
+  `verb:tenant:resource-glob` — generalizes the `family:own` / `family:*`
+  convention `admin-api/authz.ts` already commits to.)
 
-  Still open, not decided here: whether elevation grants a whole role's
-  privileges or one privilege at a time; and whether the elevated token
-  replaces the AS session cookie outright or layers alongside it. This
-  resolves the forward references already sitting in
-  `doc/use-cases/README.md` and `doc/use-cases/admin/role-management.feature`
-  ("see doc/vendor-neutral-auth.md" for the step-up mechanism), which
-  pointed here before this section existed.
+  Still open, not decided here: whether the elevated token replaces the AS
+  session cookie outright or layers alongside it. This resolves the forward
+  references already sitting in `doc/use-cases/README.md` and
+  `doc/use-cases/admin/role-management.feature` ("see
+  doc/vendor-neutral-auth.md" for the step-up mechanism), which pointed here
+  before this section existed.
