@@ -56,7 +56,14 @@ share that prefix; `/api/v1/auth*` is a higher-precedence behavior than
   admin panel at `/admin`. A CloudFront Function (`spa_viewer_request`)
   rewrites extensionless paths to the correct `index.html` (`/admin*` →
   `/admin/index.html`, everything else → `/index.html`) so client-side routing
-  works. TTL is normal for static assets.
+  works. TTL is normal for static assets. Responses on this behavior also
+  need `X-Frame-Options: DENY` and/or `Content-Security-Policy:
+  frame-ancestors 'none'` (a CloudFront response-headers policy, not
+  something `spa_viewer_request` itself does today) — we host our own login
+  UI instead of Cognito's Hosted UI specifically to control this
+  experience, which means we're also the one responsible for closing off
+  clickjacking against it, the same way external IdPs already close it off
+  against their own login pages. See `doc/vendor-neutral-auth.md`.
 - **`/api/v1/auth*` → auth API.** The first-party, **public** login +
   self-service backend: identifier-first `identify`/`password`, plus
   `signup`/`confirm`/`resend`/`forgot`/`reset`. Built via the shared

@@ -547,8 +547,72 @@ app deliberately, unaffected by how the app itself authenticates).
   until it naturally expires, which matters if a copy of it was ever
   exposed some other way (a backup, a log). Whether this also ends the
   `auth.<zone>` AS session (and therefore SSO for the user's other apps) or
-  stays scoped to this one app is a separate, deliberately-parameterized
-  decision — covered in its own scenario, not resolved here.
+  stays scoped to this one app is a separate, parameterized decision (e.g.
+  `?everywhere=true`) — worked out as its own scenario, resolved as follows:
+
+  - **"Everywhere" means `GlobalSignOut`, not `RevokeToken`.** Revoking one
+    refresh token only kills this RP's session — it has no effect on
+    refresh tokens Cognito issued to the user's *other* client apps.
+    Cognito's `GlobalSignOut` API is the actual primitive for "every
+    session this user has, across every client."
+  - **Clearing the AS session cookie can't happen server-to-server.** It's
+    scoped to `auth.<zone>`'s own origin and lives in the browser — a
+    `Set-Cookie` in `auth.<zone>`'s response to the *BFF* never reaches the
+    end user's browser at all, since the BFF isn't the browser. Ending it
+    requires one direct, credentialed cross-origin call from the front-end
+    itself to `auth.<zone>` (`credentials: include`, CORS granted to that
+    specific origin — the same per-`client_id` allowlist concept already
+    used for `redirect_uri` extends naturally to this). Nothing here
+    implies the front-end is otherwise barred from talking to `auth.<zone>`
+    — it already does, throughout the whole login redirect chain; the only
+    real constraint elsewhere in this doc is that `auth.<zone>` never hands
+    a raw token to the front-end directly.
+  - **Federation is a real, unclosable gap in "everywhere" — document it,
+    don't paper over it.** Neither `GlobalSignOut` nor clearing the AS
+    session cookie touches the external IdP's *own* session (e.g. Google's
+    session cookie on `google.com`) — that's a separate trust domain we
+    don't operate. If it's still alive in the browser, the very next login
+    attempt (this app or any other) resolves to the same IdP, redirects
+    there, and gets silently re-authenticated with no prompt at all — one
+    click, no credentials, right back in. That defeats the shared-device
+    use case "logout everywhere" exists for. Redirecting to the IdP's own
+    logout endpoint to close this properly was considered and rejected: it
+    requires a real top-level navigation away (IdPs commonly block their
+    login/logout pages from being framed at all), it likely signs the user
+    out of that IdP **entirely** — Gmail, YouTube, whatever else is open in
+    other tabs, not just our apps — a far bigger blast radius than intended,
+    and return-redirect support afterward varies by provider and isn't
+    something we control.
+  - **Mitigation instead: `prompt=login` on the federated `/authorize`
+    redirect to the IdP.** This is the standard OIDC parameter for forcing
+    re-authentication without a full external sign-out — it asks the IdP to
+    re-confirm the user's credentials for *this* authorization request only,
+    leaving the IdP's own broader session (Gmail, etc.) untouched. Needs
+    verification before relying on it: OIDC only says the OP "SHOULD"
+    honor it, not "MUST," and Google's actual behavior may fall short of a
+    true password re-prompt (e.g. an account-chooser click-through, if the
+    browser is already signed in at the OS/browser level) — confirm against
+    Google's current behavior before treating this as closing the gap.
+    Open question, not yet decided: apply `prompt=login` on **every**
+    federated login (simplest — no new state, and our own AS-session cookie
+    already provides cross-app SSO convenience without leaning on the IdP's,
+    so the cost may be smaller than it first looks), or only immediately
+    after an explicit "logout everywhere" (preserves the IdP's own SSO
+    convenience for ordinary logins, at the cost of a short-lived
+    per-user marker `auth.<zone>` has to track — the one piece of new
+    server-side state this whole flow would otherwise avoid).
+  - **`auth.<zone>` must defend its own login UI against the same framing
+    attack noted above for external IdPs.** We host our own branded login
+    pages instead of using Cognito's Hosted UI specifically so we control
+    this UX — which means we, not AWS, are responsible for hardening it.
+    Every `auth.<zone>` response (at minimum the login/identify/password
+    pages) needs `X-Frame-Options: DENY` and/or a
+    `Content-Security-Policy: frame-ancestors 'none'` header, closing off
+    clickjacking against our own credential-entry form the same way
+    external IdPs already close it off against theirs. This is a CloudFront
+    response-header concern, not an application-code one — belongs
+    alongside the CloudFront Function behaviors already described in
+    `doc/architecture.md`.
 
   The access token is **Cognito's real, unmodified token** (decision: rlc —
   not a token the BFF mints itself), so an RP backend validates it directly
