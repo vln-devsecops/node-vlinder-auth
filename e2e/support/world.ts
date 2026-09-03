@@ -4,7 +4,6 @@ import {
   CognitoIdentityProviderClient,
   AdminCreateUserCommand,
   AdminSetUserPasswordCommand,
-  AdminConfirmSignUpCommand,
   AdminDeleteUserCommand,
   AdminGetUserCommand,
 } from '@aws-sdk/client-cognito-identity-provider'
@@ -13,6 +12,7 @@ import {
   DynamoDBDocumentClient,
   PutCommand,
   DeleteCommand,
+  GetCommand,
   QueryCommand,
 } from '@aws-sdk/lib-dynamodb'
 
@@ -22,6 +22,8 @@ export interface Env {
   region: string
   /** Optional: only required by scenarios that seed a role directly (admin-panel.feature). */
   roleAssignmentsTableName: string | undefined
+  /** Optional: only required by scenarios that read a pending verification code. */
+  verificationCodesTableName: string | undefined
   defaultTenantId: string
 }
 
@@ -41,6 +43,7 @@ function loadEnv(): Env {
     userPoolId: userPoolId ?? '',
     region: region ?? '',
     roleAssignmentsTableName: process.env['E2E_ROLE_ASSIGNMENTS_TABLE'],
+    verificationCodesTableName: process.env['E2E_VERIFICATION_CODES_TABLE'],
     defaultTenantId: process.env['E2E_DEFAULT_TENANT_ID'] ?? 'default',
   }
 }
@@ -184,22 +187,6 @@ export class AuthWorld extends World {
     )
   }
 
-  /**
-   * Server-side confirmation for a user who signed up through the real SPA
-   * form (see signup.feature) — Cognito never exposes verification codes via
-   * API, so admin-confirm-sign-up is the only way to complete that flow
-   * without an email-receiving service. Still exercises the real SignUpForm
-   * and the real post-confirmation Lambda trigger.
-   */
-  async confirmSignUp(email: string): Promise<void> {
-    await this.cognito.send(
-      new AdminConfirmSignUpCommand({ UserPoolId: this.env.userPoolId, Username: email }),
-    )
-    if (!this.createdUsers.includes(email)) {
-      this.createdUsers.push(email)
-    }
-  }
-
   async getUserStatus(email: string): Promise<string | undefined> {
     const result = await this.cognito.send(
       new AdminGetUserCommand({ UserPoolId: this.env.userPoolId, Username: email }),
@@ -248,6 +235,26 @@ export class AuthWorld extends World {
       tenantId: item['tenantId'] as string,
       activation: (item['activation'] as string) ?? 'default',
     }))
+  }
+
+  /**
+   * Reads a pending verification code directly out of DynamoDB -- the app
+   * sends it via SES, and e2e has no email-receiving service to intercept
+   * it. Both partition (email) and sort (purpose) keys are known here,
+   * unlike getRoleAssignments's QueryCommand, so this is a plain GetItem.
+   * Returns undefined if no row exists yet (e.g. the send hasn't landed).
+   */
+  async getVerificationCode(email: string, purpose: string): Promise<string | undefined> {
+    if (!this.env.verificationCodesTableName) {
+      throw new Error('E2E_VERIFICATION_CODES_TABLE is not set')
+    }
+    const result = await this.ddb.send(
+      new GetCommand({
+        TableName: this.env.verificationCodesTableName,
+        Key: { email, purpose },
+      }),
+    )
+    return result.Item?.['code'] as string | undefined
   }
 
   /** Registers a user created directly through the SPA (not via admin-create-user) for cleanup. */

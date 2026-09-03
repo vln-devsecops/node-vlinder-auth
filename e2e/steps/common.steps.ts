@@ -1,4 +1,5 @@
-import { Given, When } from '@cucumber/cucumber'
+import { Given, Then, When } from '@cucumber/cucumber'
+import { expect } from '@playwright/test'
 import type { AuthWorld } from '../support/world'
 
 export const TEST_PASSWORD = 'TestPassw0rd!'
@@ -16,4 +17,16 @@ Given('a confirmed test user exists', async function (this: AuthWorld) {
 
 When('I visit the auth site', async function (this: AuthWorld) {
   await this.page.goto('/')
+})
+
+// Deliberately checks only that the panel carries the expected company name
+// and some non-empty tagline, not the exact tagline copy -- this step is
+// meant to keep working once a real deployment injects a custom AuthProfile
+// via config.json (see doc/plan-auth-chrome-and-verification-codes.md, Step
+// 9), not just today's built-in "default" profile.
+Then('the {string} brand panel is visible', async function (this: AuthWorld, companyName: string) {
+  const panel = this.page.locator('.auth-chrome-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel).toContainText(companyName)
+  await expect(panel.locator('p')).not.toBeEmpty()
 })

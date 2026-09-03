@@ -1,6 +1,6 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 10 (Step 7 is ops-owned, not a code session — skipped for now, see its own note)
+**Current step:** 11 (Step 7 is ops-owned, not a code session — skipped for now, see its own note)
 
 ## Context
 
@@ -404,12 +404,12 @@ changes that depend on the same "resolve a secret" capability.
 
 ### Step 10 — BDD: `e2e/`
 
-- [ ] `e2e/support/world.ts`: add `getVerificationCode(email, purpose)` — a
+- [x] `e2e/support/world.ts`: add `getVerificationCode(email, purpose)` — a
       `GetCommand` against the new table (both partition and sort key are
       known here, unlike `getRoleAssignments`'s `QueryCommand`, which only
       has the partition key and expects multiple rows back).
 
-- [ ] Update the `"the account is confirmed"` step (`common.steps.ts`/
+- [x] Update the `"the account is confirmed"` step (`common.steps.ts`/
       `signup.steps.ts`) — it currently admin-bypasses via
       `AdminConfirmSignUpCommand`, which starts failing once `PreSignUp`
       auto-confirms every account. Replace with: read the real code via
@@ -418,23 +418,23 @@ changes that depend on the same "resolve a secret" capability.
       `Note:` block (Cognito no longer generates this code at all) with one
       explaining the table-read precedent.
 
-- [ ] Brand-panel regression: a new reusable step (e.g. `Then the {string}
+- [x] Brand-panel regression: a new reusable step (e.g. `Then the {string}
       brand panel is visible`) asserting company-name + tagline text,
       appended to `signin.feature` and `signup.feature`.
 
-- [ ] New `e2e/features/forgot-password.feature` + steps: real happy path
+- [x] New `e2e/features/forgot-password.feature` + steps: real happy path
       (request code → read it from the table → submit on the confirm step →
       new password signs in successfully) plus a wrong-code negative case.
 
-- [ ] New `e2e/features/verify-email.feature` + steps: real happy path (sign
+- [x] New `e2e/features/verify-email.feature` + steps: real happy path (sign
       up → read the code → submit via `ConfirmSignUpForm` → login gate
       lifts) plus wrong-code and resend-shows-status secondary cases.
 
-- [ ] No change needed to `createConfirmedTestUser`/`session.feature`/
+- [x] No change needed to `createConfirmedTestUser`/`session.feature`/
       `admin-panel.feature` — `PreSignUp`'s auto-confirm fields are ignored
       when the trigger fires from `AdminCreateUser` (confirmed via AWS docs).
 
-- [ ] Verify: `cd e2e && npm test` (`cucumber-js --dry-run`) for step
+- [x] Verify: `cd e2e && npm test` (`cucumber-js --dry-run`) for step
       resolution; real `test:live` run requires Step 6+7 deployed first.
 
 ### Step 11 — Final full-suite verification
@@ -647,3 +647,28 @@ changes that depend on the same "resolve a secret" capability.
   intentionally unchecked — Step 11 says to eyeball that directory's mockups
   for visual fidelity *before* deleting it, and Step 11 hasn't run yet. Full
   workspace test suite, `e2e` dry-run, lint, and `tsc --noEmit` all pass.
+- 2026-08-27: Step 10 — replaced `world.ts`'s admin-bypass `confirmSignUp`
+  (removed entirely, now unused) with `getVerificationCode(email, purpose)`,
+  a plain `GetCommand` (both keys known); `signup.steps.ts`'s
+  `"the account is confirmed"` step now polls for the real signup code and
+  submits it through the actual `ConfirmSignUpForm` UI, and its
+  `"I sign up..."` step tracks the new user for cleanup itself (no longer
+  relying on the old admin-confirm call to do that as a side effect).
+  Rewrote `signup.feature`'s `Note:` block to describe the table-read
+  precedent instead of the now-gone admin-bypass. Added a reusable
+  `Then the {string} brand panel is visible` step (`common.steps.ts`) —
+  deliberately asserts the company name plus a non-empty tagline rather than
+  today's exact default copy, so it keeps working once a real deployment
+  injects a custom profile — appended to one scenario each in
+  `signin.feature`/`signup.feature`. Added `forgot-password.feature` (happy
+  path: request → read the `password-reset`-purpose code from the table →
+  confirm with a new password → sign in with it; plus a wrong-code negative
+  case) and `verify-email.feature` (login blocked until the real code is
+  confirmed; confirming lifts the gate; wrong-code rejected; resend shows
+  its status message) with their own steps files. 8 new scenarios (6 → 14
+  total); `cd e2e && npm test` (dry-run) resolves all of them with no
+  ambiguous/undefined steps; full workspace test suite (224 tests) and lint
+  and `tsc --noEmit` across every workspace all pass. **Not done:** a real
+  `test:live` run — still blocked on Step 6's Terraform landing in
+  `terraform-modules` main and Step 7's ops-owned deployment, neither done
+  yet.
