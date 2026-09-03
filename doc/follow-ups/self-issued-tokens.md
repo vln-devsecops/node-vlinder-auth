@@ -1,9 +1,9 @@
 # Follow-up: self-issued tokens (portable issuer/JWKS)
 
-**Status:** deferred, not part of the current phase. Captured here so the
-decision and its reasoning aren't lost — see `doc/vendor-neutral-auth.md`'s
-"Correction (rlc): the front-end drives the redirect itself..." bullet for
-what the current phase actually does instead.
+**Status:** deferred; tracked in [`../plan.md`](../plan.md)'s backlog.
+Captured here so the decision and its reasoning aren't lost — see
+[`../rationale.md`](../rationale.md) ("Tokens are Cognito's real tokens, not
+re-minted by us") for what the current phase does instead.
 
 ## The gap this closes
 
@@ -21,10 +21,10 @@ That's fine as long as Cognito stays the engine behind `auth.<zone>` forever.
 It stops being fine the moment that ever changes (a different IdP, a
 self-hosted alternative, a second identity backend for a different tenant
 tier, etc.) — every RP that hardcoded or cached Cognito's issuer/JWKS would
-need to be updated in lockstep with the swap. That's exactly the coupling
-`doc/vendor-neutral-auth.md`'s stated goal ("the frontend must not know it is
-talking to Cognito") was meant to avoid — the UI already doesn't know, but at
-the token-validation layer, every consuming backend still does.
+need to be updated in lockstep with the swap. That's exactly the coupling the
+"no consumer depends on Cognito's shapes" goal was meant to avoid — no client
+code does, but at the token-validation layer, every consuming backend is still
+wired to Cognito's specific issuer.
 
 **Explicitly not about secrecy.** The decision that motivated deferring this
 was clear: Cognito being the engine behind `auth.<zone>` is not a secret and
@@ -56,11 +56,11 @@ instead of relaying Cognito's token as-is:
    trigger in the main app). An RP backend never needs to know or care that
    Cognito sits behind any of it.
 
-This makes `auth.<zone>` a genuine (if thin) OIDC provider in its own right —
-the full-OIDC-provider build the main doc's "Platform decision" section
-rejected for the *interactive* surface (hosted `/oauth2/authorize`, a client
-registry, consent screens) is not being reopened here; this is scoped
-narrowly to token issuance/signing for the handoff that already exists.
+This makes `auth.<zone>` a genuine (if thin) OIDC provider in its own right.
+The full-OIDC-provider build rejected in [`../rationale.md`](../rationale.md)
+for the *interactive* surface (a hosted `/oauth2/authorize`, consent screens)
+is not being reopened here; this is scoped narrowly to token issuance and
+signing for the handoff that already exists.
 
 ## Why this isn't in the current phase
 
