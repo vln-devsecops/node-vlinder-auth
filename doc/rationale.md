@@ -72,10 +72,21 @@ JWE-wrapped by the auth service (opaque even to the BFF that stores it) and
 lives only in an `HttpOnly` cookie on the BFF's own origin.
 
 The **access token** sits between the two, so it is a **BFF configuration
-option**. An app with no cross-origin API calls can keep it in a cookie and
-check against it; an app that needs to send it as a bearer token to another
-origin needs it in JS. Short lifetimes plus refresh rotation are what make
-the JS-readable choice acceptable, not an argument that XSS doesn't matter.
+option, defaulting to cookie-only**. An app with no cross-origin API calls
+never needs it in JS; an app that must send it as a bearer token to another
+origin opts in. Defaulting to the safer setting means an adopter who never
+thinks about this question still ships the better posture, and the ones who
+opt in are the ones who had a reason to. Short lifetimes plus refresh
+rotation are what make opting in acceptable — not an argument that XSS
+doesn't matter.
+
+The default has a cost worth stating plainly: it makes the BFF's own API
+cookie-authenticated, which is exactly the shape CSRF exploits. A bearer
+token in a header is CSRF-immune by construction because only the app's own
+JS can set it; a cookie the browser attaches automatically is not. That is
+the same trade already documented for the admin API in `terraform-modules`'
+`modules/aws/vlinder_auth/doc/admin-api-csrf.md`, and the same mitigation
+applies: `SameSite`, plus a double-submit token on state-changing routes.
 
 ### PKCE material is minted by the client app's back-end, not its front-end
 

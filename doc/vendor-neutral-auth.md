@@ -153,7 +153,7 @@ alongside the RP's own, so the exchange needs no server-side session either.
 | Token | Contents | Where it lives |
 | --- | --- | --- |
 | **ID token** | The user's full available scope set. | Front-end memory. Readable by JS — it drives what the UI renders and offers. |
-| **Access token** | Only the scopes active for the user's default roles. | Front-end memory *or* a BFF cookie — a per-adopter BFF configuration option. |
+| **Access token** | Only the scopes active for the user's default roles. | A BFF cookie by default; front-end memory only if the adopter opts in. |
 | **Refresh token** | JWE-wrapped by the auth service, including any `elevatedGrants`. | An `HttpOnly` cookie on the BFF's own origin. Opaque to the BFF; never reaches JS. |
 
 Scopes travel as a standard space-separated OAuth `scope` claim.
@@ -272,5 +272,10 @@ anyone building their own.
   credentials to the front-end.
 - Validate `token_use` on every access token the app's own resource servers
   accept, and return `escalatable` on privilege failures.
-- Decide whether the access token is exposed to front-end JavaScript, and
-  configure the BFF accordingly.
+- Leave the access token cookie-only unless the app genuinely needs to send
+  it cross-origin as a bearer token. Opting in exposes it to JS; opting in
+  also means the BFF's own API is no longer the only cookie-authenticated
+  surface to reason about.
+- With the default, that API *is* cookie-authenticated and therefore
+  CSRF-relevant: pair `SameSite` with a double-submit token on
+  state-changing routes.

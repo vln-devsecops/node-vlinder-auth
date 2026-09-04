@@ -67,14 +67,9 @@ It is kept for its progress log and is not otherwise live.
 
 ## Open questions
 
-Settle these before the steps that depend on them; each names its dependant.
-
-- **Do we offer verification links as well as codes?** Now possible, since we
-  generate the code ourselves. Purely a product call. *Blocks: nothing;
-  decide before step 12's e2e coverage is written.*
-- **Does the reference BFF expose the access token to JS by default?** The
-  option exists either way; the default shapes what most adopters ship.
-  *Blocks: step 8.*
+None open. Add them here when they block a step, naming the dependant step;
+move the answer into [`rationale.md`](./rationale.md) once settled, rather
+than leaving the question and its resolution here.
 
 ## Steps
 
@@ -163,15 +158,19 @@ Breaking change to how every privilege is written and matched.
 - [ ] `401` on an expired or revoked refresh token, so the BFF can clear its
       cookie and propagate.
 
-### 8. Reference BFF — Sonnet / Sonnet
-
-*Depends on the open question about the access token's default exposure.*
+### 8. Reference BFF — Sonnet / **Opus (security-critical)**
 
 - [ ] A minimal but fully functional BFF in this repo: PKCE minting, encrypted
       `state`, the callback exchange, the refresh-token cookie, and relays for
       `/sudo`, `/whoami` and `/logout`.
 - [ ] A front-end client helper that single-flights refreshes.
-- [ ] Configuration switch for whether the access token reaches JS.
+- [ ] Configuration switch for whether the access token reaches JS,
+      **defaulting to cookie-only**. Opting in is for apps that must send it
+      cross-origin as a bearer token.
+- [ ] With the default, the BFF's own API is cookie-authenticated and so
+      CSRF-relevant — `SameSite` plus a double-submit token, following the
+      posture already written up in `terraform-modules`'
+      `modules/aws/vlinder_auth/doc/admin-api-csrf.md`.
 - [ ] Publish it dual ESM+CJS like the other packages.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
@@ -225,7 +224,10 @@ Not scheduled; pick up when the trigger arrives.
 - **No-code onboarding** — a self-service UI over the tenant/client/provider
   registration interface step 2 keeps narrow.
 - **User profile surface** on `auth.<zone>`'s own tenant (avatars and the
-  like).
+  like), backing the profile half of `/whoami`.
+- **Verification links as an alternative to codes.** Viable because we
+  generate and store the code ourselves, so a link embedding it needs no
+  Cognito hosted domain. A product call, not a blocker.
 - **Dual ESM+CJS retrofit** for `auth-lambda` and `auth-ui`
   (`node-vlinder-auth#86`), and for `http-api-authorizer-lambda`
   (`node-http-api-authorizer#16`).
