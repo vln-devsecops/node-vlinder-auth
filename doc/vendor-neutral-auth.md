@@ -276,6 +276,8 @@ anyone building their own.
   it cross-origin as a bearer token. Opting in exposes it to JS; opting in
   also means the BFF's own API is no longer the only cookie-authenticated
   surface to reason about.
-- With the default, that API *is* cookie-authenticated and therefore
-  CSRF-relevant: pair `SameSite` with a double-submit token on
-  state-changing routes.
+- Keep double-submit CSRF protection enabled — it is on by default, because
+  the cookie-only default makes every BFF's API cookie-authenticated. A
+  second, JS-readable cookie echoed back in a custom header on every
+  state-changing request, rejected on mismatch. The reference client helper
+  sends it automatically.

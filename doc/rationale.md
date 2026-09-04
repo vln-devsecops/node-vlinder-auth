@@ -83,10 +83,30 @@ doesn't matter.
 The default has a cost worth stating plainly: it makes the BFF's own API
 cookie-authenticated, which is exactly the shape CSRF exploits. A bearer
 token in a header is CSRF-immune by construction because only the app's own
-JS can set it; a cookie the browser attaches automatically is not. That is
-the same trade already documented for the admin API in `terraform-modules`'
-`modules/aws/vlinder_auth/doc/admin-api-csrf.md`, and the same mitigation
-applies: `SameSite`, plus a double-submit token on state-changing routes.
+JS can set it; a cookie the browser attaches automatically is not.
+
+### Double-submit CSRF protection is on by default
+
+Because cookie-only is the default, *every* adopter's BFF is
+cookie-authenticated unless they deliberately opt out. That makes the CSRF
+surface universal rather than hypothetical, so the mitigation is on by
+default too: a second, JS-readable cookie echoed back in a custom header on
+state-changing requests, rejected on mismatch. A cross-site `<form>` can
+neither set a custom header nor read a cookie value to forge one.
+
+This reverses the reasoning that applies to the admin API, where
+double-submit was deferred on the grounds that speculative security code with
+no caller rots. That argument holds when the exposure is conditional — the
+admin API avoids form-submittable routes entirely, so the gap it would close
+does not yet exist. It does not hold here: the exposure ships with the
+default, on every adopter's API, whether or not they thought about it.
+`SameSite` alone is not sufficient to lean on, because it depends on every
+current and future browser enforcing it correctly.
+
+The token is bound to the session (`HMAC(session-id, secret)`) rather than a
+bare random value, so it cannot be forged by anyone who can merely set a
+cookie on the origin. That matters little for a single origin and costs
+nothing to do properly from the start.
 
 ### PKCE material is minted by the client app's back-end, not its front-end
 

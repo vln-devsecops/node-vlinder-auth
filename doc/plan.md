@@ -167,11 +167,33 @@ Breaking change to how every privilege is written and matched.
 - [ ] Configuration switch for whether the access token reaches JS,
       **defaulting to cookie-only**. Opting in is for apps that must send it
       cross-origin as a bearer token.
-- [ ] With the default, the BFF's own API is cookie-authenticated and so
-      CSRF-relevant — `SameSite` plus a double-submit token, following the
-      posture already written up in `terraform-modules`'
-      `modules/aws/vlinder_auth/doc/admin-api-csrf.md`.
+- [ ] **Double-submit CSRF protection on by default**, not deferred until a
+      form-submittable route exists. A second cookie (`Secure`,
+      `SameSite=Strict`, deliberately *not* `HttpOnly`) alongside the
+      refresh-token cookie; the client helper echoes it in a custom header on
+      every state-changing request; the BFF rejects any mismatch. Bind it to
+      the session (`HMAC(session-id, secret)`) rather than a bare random
+      value. Design already worked out in `terraform-modules`'
+      `modules/aws/vlinder_auth/doc/admin-api-csrf.md` — implement that here,
+      always on, with disabling it a documented deviation rather than a
+      routine option.
 - [ ] Publish it dual ESM+CJS like the other packages.
+
+### 8a. Reconcile the admin API's CSRF posture — Sonnet / **Opus**
+
+`admin-api-csrf.md` currently rests on two conditional defences —
+`SameSite=Strict`, and an enforced no-`POST`-routes invariant — with
+double-submit explicitly deferred until a form-submittable route appears.
+Once step 8 makes double-submit the standing default for every adopter BFF,
+the admin API is the outlier running a weaker posture.
+
+- [ ] Adopt the same double-submit protection on the admin API, or record why
+      the same-origin AS-session case justifies staying as it is.
+- [ ] Update `admin-api-csrf.md` in `terraform-modules` either way — it
+      currently reads as "not built now, no caller", which stops being true.
+- [ ] Keep the `admin_api_never_exposes_a_post_route` contract test or replace
+      it with an assertion matching whatever posture wins; don't just delete
+      the guard.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
