@@ -192,9 +192,9 @@ enforced no-`POST`-routes invariant.
 - [ ] Rewrite `admin-api-csrf.md` in `terraform-modules`: its "not built now,
       no caller" framing and its "if a POST route is ever needed" trigger both
       stop being true once this is unconditional.
-- [ ] Keep `admin_api_never_exposes_a_post_route` as defence in depth, or
-      replace it with an assertion matching the new posture — don't just drop
-      the guard because double-submit now covers it.
+- [ ] **Keep** `admin_api_never_exposes_a_post_route`. Double-submit does not
+      make it redundant: it stays as defence in depth, and as the thing that
+      forces a deliberate second look if a `POST` route is ever added.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
