@@ -97,8 +97,12 @@ Same-origin, driven by `/authorize`.
 - **`POST /api/v1/auth/session`** — called directly by a browser with
   credentials, to clear the AS session cookie. Requires CORS for the calling
   origin.
-- **`GET /api/v1/auth/whoami`** — the server-side source of truth for
-  `{ active, held }` privileges, re-derived from `user_role_assignments`.
+- **`GET /api/v1/auth/whoami`** — the current user as the UI needs them:
+  `{ active, held }` privileges re-derived from `user_role_assignments`, plus
+  profile attributes that have no business in a token at all (avatar,
+  preferences, display name). The privilege half overlaps the ID token; the
+  rest does not, which is why this endpoint exists rather than leaving the
+  front-end to read everything out of the ID token.
 - **`POST /api/v1/auth/sudo`** — activates a held privilege. See
   [Step-up](#step-up-sudo).
 
@@ -181,7 +185,9 @@ default, so granting a role never silently widens someone's everyday access.
 
 The front-end learns what is held either by diffing the ID token's scopes
 against the access token's, or from `GET /api/v1/auth/whoami`, which
-re-derives `{ active, held }` from `user_role_assignments`.
+re-derives `{ active, held }` from `user_role_assignments`. `/whoami` is also
+the authority when the two could disagree: it reflects grants changed
+server-side mid-session, which a token minted earlier cannot.
 
 A resource server rejecting a call for a held privilege must say so
 explicitly:

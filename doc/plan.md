@@ -69,11 +69,6 @@ It is kept for its progress log and is not otherwise live.
 
 Settle these before the steps that depend on them; each names its dependant.
 
-- **Does `/whoami` survive?** Now that the ID token is readable by front-end
-  JS and carries the full scope set, a front-end can diff ID-vs-access locally
-  and never call `/whoami`. Keeping it as the server-side source of truth is
-  still defensible (grants can change server-side mid-session, and the admin
-  panel may prefer it), but it may be redundant. *Blocks: step 9.*
 - **Do we offer verification links as well as codes?** Now possible, since we
   generate the code ourselves. Purely a product call. *Blocks: nothing;
   decide before step 12's e2e coverage is written.*
@@ -179,10 +174,13 @@ Breaking change to how every privilege is written and matched.
 - [ ] Configuration switch for whether the access token reaches JS.
 - [ ] Publish it dual ESM+CJS like the other packages.
 
-### 9. Step-up — Sonnet / **Opus (security-critical)**
+### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
-*Depends on the open question about `/whoami`.*
-
+- [ ] `GET /whoami`: `{ active, held }` re-derived from
+      `user_role_assignments`, plus the profile attributes that never belong
+      in a token (avatar, preferences, display name). It is not redundant with
+      the ID token — the privilege half overlaps, the rest does not, and it
+      reflects grants changed server-side after the token was minted.
 - [ ] `POST /sudo`: re-check the grant against `user_role_assignments`, mint an
       elevated access token and a rotated refresh token carrying the grant's
       expiry. Activation never creates a grant.
@@ -231,6 +229,12 @@ Not scheduled; pick up when the trigger arrives.
 - **Dual ESM+CJS retrofit** for `auth-lambda` and `auth-ui`
   (`node-vlinder-auth#86`), and for `http-api-authorizer-lambda`
   (`node-http-api-authorizer#16`).
+- **Mermaid validation in CI.** `markdownlint` does not parse Mermaid, so a
+  diagram with a syntax error passes every check and then renders as an error
+  box on GitHub — this has already happened once here (an HTML entity in a
+  participant alias, and a semicolon in a note, both fatal to the parser).
+  Add a `mermaid-cli` render step to `ci_lint_markdown.yml`; it needs
+  `--puppeteerConfigFile` with `--no-sandbox` on GitHub runners.
 
 ## Progress log
 
