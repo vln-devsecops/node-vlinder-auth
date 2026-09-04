@@ -94,14 +94,17 @@ default too: a second, JS-readable cookie echoed back in a custom header on
 state-changing requests, rejected on mismatch. A cross-site `<form>` can
 neither set a custom header nor read a cookie value to forge one.
 
-This reverses the reasoning that applies to the admin API, where
-double-submit was deferred on the grounds that speculative security code with
-no caller rots. That argument holds when the exposure is conditional — the
-admin API avoids form-submittable routes entirely, so the gap it would close
-does not yet exist. It does not hold here: the exposure ships with the
-default, on every adopter's API, whether or not they thought about it.
-`SameSite` alone is not sufficient to lean on, because it depends on every
-current and future browser enforcing it correctly.
+This applies to **both** cookie-authenticated surfaces: every adopter's BFF,
+and the admin API, which is cookie-authenticated too (the AS session cookie,
+lifted to a bearer header at the edge). One posture, one design to review.
+
+It reverses the reasoning that previously deferred double-submit on the admin
+API — that speculative security code with no caller rots. That argument holds
+while the exposure is conditional, which it was: the admin API exposes no
+form-submittable route, so the gap double-submit would close did not yet
+exist. It does not hold once cookie authentication is the default everywhere.
+`SameSite` alone is not something to lean on either, because it depends on
+every current and future browser enforcing it correctly.
 
 The token is bound to the session (`HMAC(session-id, secret)`) rather than a
 bare random value, so it cannot be forged by anyone who can merely set a

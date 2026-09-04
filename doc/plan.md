@@ -179,21 +179,22 @@ Breaking change to how every privilege is written and matched.
       routine option.
 - [ ] Publish it dual ESM+CJS like the other packages.
 
-### 8a. Reconcile the admin API's CSRF posture — Sonnet / **Opus**
+### 8a. Double-submit on the admin API — Sonnet / **Opus (security-critical)**
 
-`admin-api-csrf.md` currently rests on two conditional defences —
-`SameSite=Strict`, and an enforced no-`POST`-routes invariant — with
-double-submit explicitly deferred until a form-submittable route appears.
-Once step 8 makes double-submit the standing default for every adopter BFF,
-the admin API is the outlier running a weaker posture.
+Double-submit is the standing posture for **both** cookie-authenticated
+surfaces, not just adopter BFFs. The admin API is cookie-authenticated too
+(the AS session cookie, lifted to a bearer header at the edge), so it gets
+the same protection rather than continuing to rest on `SameSite` plus an
+enforced no-`POST`-routes invariant.
 
-- [ ] Adopt the same double-submit protection on the admin API, or record why
-      the same-origin AS-session case justifies staying as it is.
-- [ ] Update `admin-api-csrf.md` in `terraform-modules` either way — it
-      currently reads as "not built now, no caller", which stops being true.
-- [ ] Keep the `admin_api_never_exposes_a_post_route` contract test or replace
-      it with an assertion matching whatever posture wins; don't just delete
-      the guard.
+- [ ] Implement double-submit on the admin API, matching the BFF's scheme so
+      there is one design to review, not two.
+- [ ] Rewrite `admin-api-csrf.md` in `terraform-modules`: its "not built now,
+      no caller" framing and its "if a POST route is ever needed" trigger both
+      stop being true once this is unconditional.
+- [ ] Keep `admin_api_never_exposes_a_post_route` as defence in depth, or
+      replace it with an assertion matching the new posture — don't just drop
+      the guard because double-submit now covers it.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
