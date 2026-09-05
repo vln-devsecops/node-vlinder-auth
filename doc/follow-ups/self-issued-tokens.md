@@ -7,24 +7,25 @@ re-minted by us") for what the current phase does instead.
 
 ## The gap this closes
 
-Cognito's `iss` claim and JWKS are fixed to
-`https://cognito-idp.<region>.amazonaws.com/<userPoolId>` — this is not
-configurable, even with a Cognito custom domain (custom domains only rehost
-the hosted-UI/OAuth endpoints, never the token issuer or
-`/.well-known/jwks.json`). The current phase passes through Cognito's real,
-unmodified access token to RP front-ends and mirrors Cognito's JWKS at
-`auth.<zone>/.well-known/jwks.json` for convenience, but the token's actual
-`iss` still names Cognito's own AWS hostname. Every RP backend that validates
-the token is therefore wired to that specific issuer identity.
+The implementation currently uses Cognito to build its tokens, so some of the
+shape of the generated tokens is dictated by Cognito's implementation. Except
+for  Cognito's `iss` claim and JWKS, which are fixed to
+`https://cognito-idp.<region>.amazonaws.com/<userPoolId>`, this has not been a
+true limitation and we can live with `iss` pointing at Cognito provided the 
+client-side can be told that's where it should expect it to be pointed. 
+Therefore, the current code passes through Cognito's real,
+unmodified access token to RP front-ends and both mirrors Cognito's JWKS at
+`auth.<zone>/.well-known/jwks.json` for convenience, and provides a configuration
+end point for implementations to expect `iss` to point at Cognito.
 
-That's fine as long as Cognito stays the engine behind `auth.<zone>` forever.
-It stops being fine the moment that ever changes (a different IdP, a
-self-hosted alternative, a second identity backend for a different tenant
-tier, etc.) — every RP that hardcoded or cached Cognito's issuer/JWKS would
-need to be updated in lockstep with the swap. That's exactly the coupling the
-"no consumer depends on Cognito's shapes" goal was meant to avoid — no client
-code does, but at the token-validation layer, every consuming backend is still
-wired to Cognito's specific issuer.
+As soon as we run into a limitation that, for whatever reason, we can't live 
+with, that will disqualify Cognito as the token-minting implementation. This
+could be anything. For example, if Cognito sticks to classic crypto for longer
+than we can accept, we may need to mint our own tokens to implement hybrid of
+post-quantum crypto. If there is something we need to change in the shape of
+the tokens we mint that Cognito does not allow, that would also disqualify
+Cognito. As long as that doesn't happen, however, Cognito will remain the 
+engine behind token minting.
 
 **Explicitly not about secrecy.** The decision that motivated deferring this
 was clear: Cognito being the engine behind `auth.<zone>` is not a secret and
@@ -46,10 +47,12 @@ instead of relaying Cognito's token as-is:
    (this repo already has precedent for exactly this — the identify-session
    JWS is signed with a KMS asymmetric key held by the auth Lambda; the same
    pattern extends naturally here) rather than Cognito's own signing key.
-3. `auth.<zone>` serves its own `/.well-known/jwks.json` and
+3. The configuration end point instructing clients what value to expect in
+   the `iss` field is updated to `auth.<zone>`.
+4. `auth.<zone>` serves its own `/.well-known/jwks.json` and
    `/.well-known/openid-configuration` — a real, self-consistent OIDC
    discovery document, not a mirror of someone else's.
-4. The claims shape is fully ours to define: carry through whatever Cognito
+5. The claims shape is fully ours to define: carry through whatever Cognito
    verified (`sub`, `email`) plus the first-party authorization claims this
    system already normalizes regardless of backing store (`permissions`,
    `tenantId` — see `shared/privileges.ts` and the pre-token-generation
@@ -64,10 +67,13 @@ signing for the handoff that already exists.
 
 ## Why this isn't in the current phase
 
+- We don't need it: Cognito-shaped tokens are fine and secure and standing up
+  the infrastructure and code to implement this now would be a waste of time,
+  and will be as long as the need isn't there.
 - It requires new signing-key infrastructure (a KMS asymmetric key for the
   auth Lambda to hold, beyond the one already used for the identify-session
-  JWS) and two new public endpoints (`/.well-known/jwks.json`,
-  `/.well-known/openid-configuration`) that don't exist yet.
+  JWS) and a new public endpoint (`/.well-known/jwks.json`) that doesn't exist
+  yet.
 - Nothing currently consumes it — there's no RP integrated against this
   system yet that would be broken by the simpler pass-through approach. This
   follows the same reasoning `doc/admin-api-csrf.md` (in `terraform-modules`)
@@ -78,8 +84,13 @@ signing for the handoff that already exists.
 
 ## When to pick this up
 
-When either of these becomes real, not before:
+When any one of these becomes real, not before:
 
+- The shape of the generated token no longer needs requirements if based on 
+  Cognito, either because of a newly-discovered requirement or a change in 
+  Cognito's behavior.
+- Cryptographic requirements require us to sign tokens differently than what
+  Cognito implements, disqualifying Cognito as the backing implementation.
 - A second identity engine needs to sit behind `auth.<zone>` (a different
   backing store for a different tenant tier, or an actual migration off
   Cognito), and existing RPs need to keep working unchanged through that
