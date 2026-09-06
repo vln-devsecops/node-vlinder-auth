@@ -57,9 +57,9 @@ BDD e2e suite covering sign-in, sign-up, verification and password reset
 against a real deployment.
 
 The design has since moved on in ways the code has not yet caught up with —
-the client registry, the tenant/IdP split, the RP handoff, the token split and
-the step-up flow are all specified but unbuilt. That gap is what the steps
-below close.
+the client registry, the tenant/IdP split, the RP handoff, the token split,
+the step-up flow and the OIDC discovery document are all specified but
+unbuilt. That gap is what the steps below close.
 
 Prior plan: [`plan-auth-chrome-and-verification-codes.md`](./plan-auth-chrome-and-verification-codes.md)
 is complete except its final verification pass, folded in as step 0 below.
@@ -128,6 +128,43 @@ Breaking change to how every privilege is written and matched.
       'none'` on the default behavior, via a response-headers policy.
 - [ ] Explicit contract tests for both. File the tracking issue on
       `workspace-vlinder-auth`.
+
+### 4a. Publish the OIDC discovery document — Sonnet / **Opus (security-critical)**
+
+The published `issuer`/`jwks_uri` are what every resource server pins against.
+Nothing exists today: `config.json` carries no issuer, and the Terraform
+`issuer_url` output is deploy-time wiring, not a runtime contract — with only
+that, changing the signing engine means every relying party re-applies in
+lockstep. Prerequisite for steps 5, 6 and 8, which all assume consumers can
+discover what to trust. Reasoning in [`rationale.md`](./rationale.md) ("The
+expected issuer is configuration, not a constant").
+
+- [ ] Terraform writes `.well-known/openid-configuration` into the auth-site
+      S3 origin via `local_file`, exactly as it already does `config.json` —
+      every value is a per-deployment constant known at apply time.
+- [ ] Populate `issuer` and `jwks_uri` from the existing
+      `local.admin_api_issuer_url` (Cognito's real endpoints — **no mirror**,
+      so key rotation can never be served stale), plus the first-party
+      `authorization_endpoint`, `token_endpoint` and `end_session_endpoint`.
+- [ ] Exempt `/.well-known/*` from `spa_viewer_request`. That path is
+      extensionless by specification, so the SPA fallback currently captures
+      it and returns `index.html` with a `200` — a failure that looks like
+      success to every consumer. Contract-test the exemption specifically.
+- [ ] Serve it public, cacheable and CORS-open (`Access-Control-Allow-Origin:
+      *`); it carries nothing secret and browser-side consumers must reach it.
+- [ ] Contract-test that `issuer` is derived from this module's own user pool
+      and that `jwks_uri` resolves, mirroring
+      `identity.tftest.hcl`'s existing `issuer_url` assertions.
+- [ ] Cover it in the e2e suite: fetch the document against a real deployment
+      and validate a live access token's `iss` against the value it publishes,
+      rather than against a constant in the test.
+- [ ] Update the `vlinder_auth` README: `issuer_url` is convenience for wiring
+      a JWT authorizer in the same apply, **not** the integration contract.
+- [ ] Document the spec deviation where integrators will hit it — the
+      document's `issuer` will not match its host until self-issuance, so
+      strict OIDC libraries reject it. Already written up in
+      [`vendor-neutral-auth.md`](./vendor-neutral-auth.md); make sure the
+      module README says it too.
 
 ### 5. Split ID and access token claims — Sonnet / **Opus (security-critical)**
 
@@ -242,8 +279,12 @@ enforced no-`POST`-routes invariant.
 Not scheduled; pick up when the trigger arrives.
 
 - **Self-issued tokens** — [`follow-ups/self-issued-tokens.md`](./follow-ups/self-issued-tokens.md).
-  Trigger: a second identity engine, or an external RP that shouldn't be
-  handed AWS-specific issuer details.
+  Trigger: two identity engines live *at once*, a token shape or signing
+  algorithm Cognito cannot produce, or an external RP that shouldn't be handed
+  AWS-specific issuer details. A straight migration off Cognito is *not* a
+  trigger — step 4a's discovery document makes that one published value
+  changing. Doing this would also make that document spec-compliant, which it
+  is not today.
 - **No-code onboarding** — a self-service UI over the tenant/client/provider
   registration interface step 2 keeps narrow.
 - **User profile surface** on `auth.<zone>`'s own tenant (avatars and the
@@ -280,3 +321,20 @@ done alongside what was.
   intersection; `/api/v1` is preserved end to end; federation is a resource
   with the step as a parameter; we ship a reference BFF. No code changed —
   steps 1-12 above are the resulting gap.
+
+- **2026-09-06** — Corrected the reasoning around Cognito's fixed issuer, and
+  added step 4a. The docs had treated `iss` naming Cognito as a coupling
+  defect that self-issuance would fix, and had claimed we mirror Cognito's
+  JWKS at `auth.<zone>/.well-known/jwks.json`. Both were wrong: no mirror
+  exists anywhere in the code, and the coupling is not inherent — it comes
+  entirely from consumers learning the issuer at build time instead of from a
+  published endpoint. Establishing that endpoint is required on security
+  grounds regardless (a validator that trusts the token's own `iss` pins
+  nothing), and it is separately what makes a future engine swap a one-value
+  change. Self-issued tokens stay in the backlog, but for a narrower reason —
+  issuer *ownership*, not portability — with correspondingly narrower
+  triggers. The discovery document deliberately uses the standard
+  `/.well-known/openid-configuration` path even though its `issuer` will not
+  match its host until self-issuance, which strict OIDC libraries reject; the
+  deviation is temporary, self-resolving, and documented where integrators
+  will meet it. No code changed — step 4a is the resulting gap.

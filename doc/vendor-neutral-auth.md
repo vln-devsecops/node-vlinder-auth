@@ -7,7 +7,8 @@ No client or relying-party code depends on Cognito's API shapes — no
 `X-Amz-Target`, no Cognito envelopes, no Cognito flow names. Everything
 crosses the boundary as first-party JSON and redirects. That Cognito is the
 engine behind `auth.<zone>` is not a secret; RP backends validate tokens
-against its issuer directly.
+against its issuer directly — but they learn *which* issuer from a discovery
+document `auth.<zone>` publishes, never from the token and never hardcoded.
 
 Why it is shaped this way: [`rationale.md`](./rationale.md). System structure:
 [`architecture.md`](./architecture.md). Worked end-to-end scenarios:
@@ -46,6 +47,11 @@ cross-origin navigation.
 ## API contract (`/api/v1/auth`)
 
 The `/api/v1` prefix is preserved end to end; nothing strips it in transit.
+
+One endpoint sits deliberately outside this namespace:
+**`GET /.well-known/openid-configuration`**, which is unversioned because its
+path is fixed by the OIDC Discovery spec and because it is the one address
+that must never move. See [Discovery](#discovery-and-token-validation).
 
 ### Layer 1 — RP handoff
 
@@ -147,6 +153,63 @@ directive instead of a password prompt, the front-end navigates to
 `action=callback` after the provider's code is exchanged and its ID token
 validated. The identify-session JWS carries the provider `state` and `nonce`
 alongside the RP's own, so the exchange needs no server-side session either.
+
+## Discovery and token validation
+
+`auth.<zone>` publishes an OIDC discovery document at
+`https://auth.<zone>/.well-known/openid-configuration`. It is public,
+unauthenticated, cacheable, and CORS-open. **This is the only supported way
+to learn what issuer and keys to trust.**
+
+```json
+{
+  "issuer": "https://cognito-idp.<region>.amazonaws.com/<userPoolId>",
+  "jwks_uri": "https://cognito-idp.<region>.amazonaws.com/<userPoolId>/.well-known/jwks.json",
+  "authorization_endpoint": "https://auth.<zone>/api/v1/auth/authorize",
+  "token_endpoint": "https://auth.<zone>/api/v1/auth/token",
+  "end_session_endpoint": "https://auth.<zone>/api/v1/auth/logout"
+}
+```
+
+`issuer` and `jwks_uri` name Cognito today because Cognito signs the tokens
+today; both are fixed by Cognito and cannot be rehosted. Nothing is proxied or
+mirrored — `jwks_uri` points at Cognito's real key set, so key rotation is
+never stale. The endpoint URLs are first-party and stable now.
+
+A resource server validating an access token must:
+
+1. Read `issuer` and `jwks_uri` from **this document**, not from the token.
+   A validator that trusts the token's own `iss`, or fetches keys from a
+   location the token names, pins nothing and will accept a well-formed token
+   from any issuer at all.
+2. Verify the signature against the published JWKS, and check `exp` and
+   `aud`.
+3. Reject any token whose `iss` is not exactly the published value.
+4. Reject anything whose `token_use` is not `access` (see
+   [Token model](#token-model)).
+
+Cache the document, refresh it periodically, and treat the values as able to
+change. That is the point: when the signing engine changes, these two values
+change and correctly-built consumers follow with no redeploy. A consumer that
+copies them into its own config at build time has opted out of that and will
+break on the swap.
+
+### Known deviation
+
+OIDC Discovery §4.3 and RFC 8414 §2 require a discovery document's `issuer` to
+equal the origin it was fetched from. Ours does not while Cognito signs:
+fetched from `auth.<zone>`, it names Cognito. Strict client libraries
+(`openid-client`, most Go and Java OIDC stacks) enforce this and will reject
+the document outright.
+
+Until `auth.<zone>` issues its own tokens, integrators using such a library
+should either fetch the document as plain JSON and configure the library
+manually, or point it at Cognito's own discovery URL — which is fully
+compliant, and which `issuer` above tells them how to construct. When
+`auth.<zone>` becomes the issuer, this document becomes compliant at the same
+path and strict discovery starts working with no other change. Reasoning in
+[`rationale.md`](./rationale.md); the migration is
+[`follow-ups/self-issued-tokens.md`](./follow-ups/self-issued-tokens.md).
 
 ## Token model
 
@@ -270,6 +333,10 @@ anyone building their own.
 - Single-flight refreshes.
 - Relay `/sudo`, `/whoami` and `/logout` rather than exposing `auth.<zone>`
   credentials to the front-end.
+- Resolve the expected `issuer` and `jwks_uri` from
+  `auth.<zone>/.well-known/openid-configuration` at runtime, cache them, and
+  refresh periodically. Do not hardcode either, and do not copy them into
+  build-time config — that is what breaks on a signing-engine change.
 - Validate `token_use` on every access token the app's own resource servers
   accept, and return `escalatable` on privilege failures.
 - Leave the access token cookie-only unless the app genuinely needs to send

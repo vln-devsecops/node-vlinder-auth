@@ -46,13 +46,59 @@ any client or RP code depending on Cognito's *API shapes*: no
 The boundary is the first-party `/api/v1/auth` contract; behind it, the engine
 is replaceable without touching a single consumer.
 
+### The expected issuer is configuration, not a constant
+
+A relying party must never take a token's `iss` at face value, and must never
+fetch a validation key from a location the token itself names — that is a
+validator with no pinning at all, which accepts anything signed by anyone.
+The expected issuer has to arrive out-of-band, from a source we control.
+
+So `auth.<zone>` publishes an OIDC discovery document at
+`/.well-known/openid-configuration` naming the `issuer` and `jwks_uri` a
+consumer should expect. RPs pin against those published values. This is
+required on security grounds alone, before portability enters the picture.
+
+It also happens to be what makes the issuer portable. Because no consumer
+hardcodes an issuer, changing what mints tokens later is a change to one
+published value — not a coordinated redeploy of every relying party in
+lockstep. The address is ours and permanent; the values inside it are free to
+move.
+
+The Terraform `issuer_url` output is not a substitute. It hands you the value
+at `terraform apply`, which bakes it into each consumer at deploy time and
+reintroduces exactly the lockstep coupling the endpoint removes. It stays as
+convenience for wiring an API Gateway JWT authorizer in the same apply; it is
+not the contract.
+
+### The standard discovery path, accepting a temporary spec deviation
+
+The config document could have been a first-party endpoint on `/api/v1/auth`,
+sidestepping a real conflict: OIDC Discovery §4.3 and RFC 8414 §2 both require
+a discovery document's `issuer` to match the host it was fetched from. Ours,
+served at `auth.<zone>` while naming Cognito's issuer, does not — and strict
+client libraries validate that and refuse the document.
+
+The standard path was chosen anyway. The deviation is temporary and
+self-resolving: the day `auth.<zone>` mints its own tokens, the document
+becomes compliant with no path change and no consumer migration. A
+first-party endpoint would have been correct today and abandoned then,
+forcing exactly the coordinated cutover this whole design exists to avoid.
+
+The tradeoff is that integrators using a strict OIDC library cannot point it
+at `auth.<zone>` yet. They read the document as plain JSON and pin manually,
+or aim the library at Cognito's own discovery URL — which is fully compliant,
+and which our document tells them where to find. This is a documented
+limitation in [`vendor-neutral-auth.md`](./vendor-neutral-auth.md), not an
+accident to be discovered at integration time.
+
 ### Tokens are Cognito's real tokens, not re-minted by us
 
-Re-signing tokens at `auth.<zone>` would make the issuer ours and therefore
-portable across a future engine swap. It was rejected for this phase: it
-needs new signing-key infrastructure and its own JWKS/discovery endpoints, and
-nothing currently consumes it. The cost — every RP is wired to Cognito's
-specific, non-relocatable issuer identity — is accepted for now and tracked in
+Re-signing tokens at `auth.<zone>` would make the issuer ours outright. It was
+rejected for this phase: it needs new signing-key infrastructure and its own
+JWKS endpoint, and nothing currently consumes it. Crucially, the cost is
+*not* issuer portability — the discovery document above already covers that.
+What we give up is control over what signs a token at all, which only starts
+to matter under the specific triggers tracked in
 [`follow-ups/self-issued-tokens.md`](./follow-ups/self-issued-tokens.md).
 
 ## Token delivery

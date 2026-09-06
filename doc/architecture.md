@@ -60,7 +60,10 @@ edge rewrite that nobody remembers is a debugging trap:
 
 - **`spa_viewer_request`** (default behavior) rewrites extensionless paths to
   the right `index.html` (`/admin*` → `/admin/index.html`, everything else →
-  `/index.html`) so client-side routing works. It does not touch API paths.
+  `/index.html`) so client-side routing works. It does not touch API paths,
+  and it must not touch `/.well-known/*` either — that path is extensionless
+  by specification, so the SPA fallback would otherwise swallow the discovery
+  document and serve `index.html` in its place, with a `200`.
 - **`admin_api_rewrite`** (`/api/v1/*`) lifts the `vln_auth_session` cookie
   into an `Authorization: Bearer` header so the JWT authorizer sees ordinary
   bearer semantics, and strips any client-supplied `x-origin-verify` header.
@@ -68,6 +71,15 @@ edge rewrite that nobody remembers is a debugging trap:
 
 The `/api/v1/auth*` behavior needs no function: its routes are public and its
 paths are passed through unmodified.
+
+`/.well-known/openid-configuration` is served from the S3 origin, written by
+Terraform at apply time the same way `config.json` is — its values (the
+issuer, the JWKS URI, the first-party endpoint URLs) are all per-deployment
+constants known at apply time. It is public, cacheable and CORS-open, and it
+is the published contract for what issuer and keys a relying party should
+trust; see [`vendor-neutral-auth.md`](./vendor-neutral-auth.md). It needs a
+behavior or a `spa_viewer_request` exemption so the SPA fallback does not
+capture it.
 
 Responses on the default behavior carry `X-Frame-Options: DENY` and
 `Content-Security-Policy: frame-ancestors 'none'` (a CloudFront
