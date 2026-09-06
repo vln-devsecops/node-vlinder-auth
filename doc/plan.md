@@ -1,0 +1,340 @@
+# Living plan
+
+The standing work queue for the auth component. This file is the source of
+truth for progress, not conversation memory — sessions implementing it may be
+far apart and start cold.
+
+- **What** is built: [`architecture.md`](./architecture.md) and
+  [`vendor-neutral-auth.md`](./vendor-neutral-auth.md).
+- **Why** it is shaped that way: [`rationale.md`](./rationale.md).
+- **Order and status**: this file.
+
+## How to use this plan
+
+1. Pick **one** step whose prerequisites are met. Don't chain into the next
+   one unannounced.
+2. Implement it TDD-first, matching the conventions already in the package you
+   are touching.
+3. Update this file: tick the step's boxes, move it to `done`, append a dated
+   entry to the [progress log](#progress-log). Convert relative dates to
+   absolute.
+4. Open a PR and **confirm CI is clean before calling the step done** —
+   passing tests locally is not the same as a clean pipeline. Check
+   `gh pr checks`, and verify the reported head SHA matches your branch's HEAD
+   before trusting the result.
+5. Stop for review.
+
+If a step turns out to be wrong or a decision needs revisiting, update
+[`rationale.md`](./rationale.md) with the new decision and its reasoning
+rather than leaving a correction note in the spec docs. The specs describe the
+intended system in its final form; they should never accumulate a history of
+how they got there.
+
+### Which model for which step
+
+Each step below carries a recommendation. The heuristic:
+
+| | Implementation | Review |
+| --- | --- | --- |
+| **Sonnet** | Well-specified work with a clear target: Terraform wiring, test writing, refactors against a settled spec, doc updates, packaging. | Mechanical correctness, convention conformance, test coverage. |
+| **Opus** | Steps marked **security-critical** — anything minting, encrypting, validating or scoping a token. | **Required** on every security-critical step, and on any step that changes the privilege model, token contents, or what a resource server trusts. Also worth it for cross-cutting consistency passes. |
+
+A Sonnet session may implement a security-critical step; the *review* is what
+must be Opus. When in doubt about whether a change is security-critical, ask:
+*if this were subtly wrong, would it grant access that should have been
+denied?* If yes, it is.
+
+## Current state
+
+Nothing is deployed. There is no installed base and no backwards
+compatibility to preserve.
+
+Built and merged: the auth Lambda and the full `/api/v1/auth` self-service
+surface (identify, password, signup, confirm, resend, forgot, reset) with
+app-owned verification codes; the RBAC tables and triggers; the admin API and
+panel; the auth-site SPA on `AuthChrome` with runtime-injected branding; the
+BDD e2e suite covering sign-in, sign-up, verification and password reset
+against a real deployment.
+
+The design has since moved on in ways the code has not yet caught up with —
+the client registry, the tenant/IdP split, the RP handoff, the token split,
+the step-up flow and the OIDC discovery document are all specified but
+unbuilt. That gap is what the steps below close.
+
+Prior plan: [`plan-auth-chrome-and-verification-codes.md`](./plan-auth-chrome-and-verification-codes.md)
+is complete except its final verification pass, folded in as step 0 below.
+It is kept for its progress log and is not otherwise live.
+
+## Open questions
+
+None open. Add them here when they block a step, naming the dependant step;
+move the answer into [`rationale.md`](./rationale.md) once settled, rather
+than leaving the question and its resolution here.
+
+## Steps
+
+### 0. Close out the prior plan — Sonnet / Sonnet
+
+- [ ] Full-suite verification: `npm run test --workspaces --if-present`,
+      `cd e2e && npm test`, lint, `tsc --noEmit` across workspaces.
+- [ ] Eyeball `design_handoff_auth_chrome/`'s mockups against the deployed
+      `AuthChrome`, then delete that directory (it exists only for that check).
+- [ ] Confirm the SonarQube baseline is clean — zero new *and* zero remaining
+      baseline findings.
+
+### 1. Privilege model — Sonnet / **Opus (security-critical)**
+
+Breaking change to how every privilege is written and matched.
+
+- [ ] Adopt `verb:tenant-id:resource-glob` throughout, with gitignore-style
+      globbing (`*` within a segment, `**` across). Treat
+      `verb:resource-glob`, `verb::resource-glob` and `verb:*:resource-glob`
+      as equivalent; reject a bare `verb`.
+- [ ] Write the matcher TDD-first, including the traversal boundary cases —
+      this is where a subtle bug grants access it shouldn't.
+- [ ] Emit scopes as a **space-separated** OAuth `scope` claim, not
+      comma-joined `permissions` (`pre-token-generation/handler.ts`).
+- [ ] Replace `admin-api/authz.ts`'s role-vs-scope intersection with plain
+      scope matching: the token is authoritative and carries no roles.
+- [ ] Update the seeded role catalog, every fixture, and the privilege tables
+      in `use-cases/README.md` to the new form.
+
+### 2. Client registry and tenancy resolution — Sonnet / **Opus**
+
+- [ ] `client_id → tenant_id` registry; `(email_domain, tenant_id) →
+      identity provider` mapping. Extend the tenants table rather than
+      inventing a parallel store.
+- [ ] Resolve the tenant from `client_id` at `/authorize`; resolve the
+      provider from email domain at `/identify`, falling back to the tenant's
+      defaults when no provider is pinned.
+- [ ] Give the auth application its own tenant, so `auth.<zone>` reached
+      without a `client_id` (admin panel, later user profile) still resolves.
+- [ ] Confirm single-tenant mode still assigns a tenant; it differs only by
+      exposing no tenant CRUD.
+- [ ] Keep registration behind a narrow interface so no-code onboarding can be
+      layered on later.
+
+### 3. Stop stripping `/api/v1` — Sonnet / Sonnet
+
+- [ ] Include the prefix in the API Gateway routes for both APIs.
+- [ ] Delete `auth_api_rewrite` entirely; reduce `admin_api_rewrite` to the
+      cookie lift and the `x-origin-verify` strip, with no URI rewrite.
+- [ ] Contract-test that no CloudFront function rewrites an API URI, so a
+      future `/api/v2` can be routed alongside.
+
+### 4. Edge response headers — Sonnet / Sonnet
+
+- [ ] `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
+      'none'` on the default behavior, via a response-headers policy.
+- [ ] Explicit contract tests for both. File the tracking issue on
+      `workspace-vlinder-auth`.
+
+### 4a. Publish the OIDC discovery document — Sonnet / **Opus (security-critical)**
+
+The published `issuer`/`jwks_uri` are what every resource server pins against.
+Nothing exists today: `config.json` carries no issuer, and the Terraform
+`issuer_url` output is deploy-time wiring, not a runtime contract — with only
+that, changing the signing engine means every relying party re-applies in
+lockstep. Prerequisite for steps 5, 6 and 8, which all assume consumers can
+discover what to trust. Reasoning in [`rationale.md`](./rationale.md) ("The
+expected issuer is configuration, not a constant").
+
+- [ ] Terraform writes `.well-known/openid-configuration` into the auth-site
+      S3 origin via `local_file`, exactly as it already does `config.json` —
+      every value is a per-deployment constant known at apply time.
+- [ ] Populate `issuer` and `jwks_uri` from the existing
+      `local.admin_api_issuer_url` (Cognito's real endpoints — **no mirror**,
+      so key rotation can never be served stale), plus the first-party
+      `authorization_endpoint`, `token_endpoint` and `end_session_endpoint`.
+- [ ] Exempt `/.well-known/*` from `spa_viewer_request`. That path is
+      extensionless by specification, so the SPA fallback currently captures
+      it and returns `index.html` with a `200` — a failure that looks like
+      success to every consumer. Contract-test the exemption specifically.
+- [ ] Serve it public, cacheable and CORS-open (`Access-Control-Allow-Origin:
+      *`); it carries nothing secret and browser-side consumers must reach it.
+- [ ] Contract-test that `issuer` is derived from this module's own user pool
+      and that `jwks_uri` resolves, mirroring
+      `identity.tftest.hcl`'s existing `issuer_url` assertions.
+- [ ] Cover it in the e2e suite: fetch the document against a real deployment
+      and validate a live access token's `iss` against the value it publishes,
+      rather than against a constant in the test.
+- [ ] Update the `vlinder_auth` README: `issuer_url` is convenience for wiring
+      a JWT authorizer in the same apply, **not** the integration contract.
+- [ ] Document the spec deviation where integrators will hit it — the
+      document's `issuer` will not match its host until self-issuance, so
+      strict OIDC libraries reject it. Already written up in
+      [`vendor-neutral-auth.md`](./vendor-neutral-auth.md); make sure the
+      module README says it too.
+
+### 5. Split ID and access token claims — Sonnet / **Opus (security-critical)**
+
+- [ ] `pre-token-generation` resolves twice: the full held-plus-active set for
+      the ID token, the active-only set for the access token. It already runs
+      on the V2 event, which supports diverging the two.
+- [ ] Test that a held-but-inactive privilege appears on the ID token and
+      **never** on the access token.
+
+### 6. RP handoff: `/authorize` + `/token` — Sonnet / **Opus (security-critical)**
+
+- [ ] One-time token as `jwe({user, redirect_uri, code_challenge, timestamp})`
+      — `alg: dir`, `enc: A256GCM`, key held by the auth Lambda.
+- [ ] PKCE verification: `base64url(sha256(code_verifier))` against the
+      embedded challenge, plus expiry. Require `code_challenge_method=S256`.
+- [ ] `client_id`/`redirect_uri` allowlist validation at `/authorize`.
+- [ ] Extend the identify-session JWS to carry `redirect_uri`,
+      `code_challenge` and the RP's `state` across identify → password.
+- [ ] Record `authMethod` (`local` | `federated`) on the AS session — step 9
+      depends on it.
+
+### 7. Refresh: JWE wrapping, rotation, grant container — Sonnet / **Opus**
+
+- [ ] Wrap Cognito's refresh token in a JWE the BFF cannot read; rotate it on
+      every refresh; enable Cognito rotation with reuse detection.
+- [ ] Carry an `elevatedGrants` list in the payload and decay expired entries
+      on every refresh, before computing the access token's scopes.
+- [ ] `401` on an expired or revoked refresh token, so the BFF can clear its
+      cookie and propagate.
+
+### 8. Reference BFF — Sonnet / **Opus (security-critical)**
+
+- [ ] A minimal but fully functional BFF in this repo: PKCE minting, encrypted
+      `state`, the callback exchange, the refresh-token cookie, and relays for
+      `/sudo`, `/whoami` and `/logout`.
+- [ ] A front-end client helper that single-flights refreshes.
+- [ ] Configuration switch for whether the access token reaches JS,
+      **defaulting to cookie-only**. Opting in is for apps that must send it
+      cross-origin as a bearer token.
+- [ ] **Double-submit CSRF protection on by default**, not deferred until a
+      form-submittable route exists. A second cookie (`Secure`,
+      `SameSite=Strict`, deliberately *not* `HttpOnly`) alongside the
+      refresh-token cookie; the client helper echoes it in a custom header on
+      every state-changing request; the BFF rejects any mismatch. Bind it to
+      the session (`HMAC(session-id, secret)`) rather than a bare random
+      value. Design already worked out in `terraform-modules`'
+      `modules/aws/vlinder_auth/doc/admin-api-csrf.md` — implement that here,
+      always on, with disabling it a documented deviation rather than a
+      routine option.
+- [ ] Publish it dual ESM+CJS like the other packages.
+
+### 8a. Double-submit on the admin API — Sonnet / **Opus (security-critical)**
+
+Double-submit is the standing posture for **both** cookie-authenticated
+surfaces, not just adopter BFFs. The admin API is cookie-authenticated too
+(the AS session cookie, lifted to a bearer header at the edge), so it gets
+the same protection rather than continuing to rest on `SameSite` plus an
+enforced no-`POST`-routes invariant.
+
+- [ ] Implement double-submit on the admin API, matching the BFF's scheme so
+      there is one design to review, not two.
+- [ ] Rewrite `admin-api-csrf.md` in `terraform-modules`: its "not built now,
+      no caller" framing and its "if a POST route is ever needed" trigger both
+      stop being true once this is unconditional.
+- [ ] **Keep** `admin_api_never_exposes_a_post_route`. Double-submit does not
+      make it redundant: it stays as defence in depth, and as the thing that
+      forces a deliberate second look if a `POST` route is ever added.
+
+### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
+
+- [ ] `GET /whoami`: `{ active, held }` re-derived from
+      `user_role_assignments`, plus the profile attributes that never belong
+      in a token (avatar, preferences, display name). It is not redundant with
+      the ID token — the privilege half overlaps, the rest does not, and it
+      reflects grants changed server-side after the token was minted.
+- [ ] `POST /sudo`: re-check the grant against `user_role_assignments`, mint an
+      elevated access token and a rotated refresh token carrying the grant's
+      expiry. Activation never creates a grant.
+- [ ] Local sessions redirect to an `auth.<zone>`-hosted password
+      confirmation; federated sessions take an in-app confirmation only.
+- [ ] `escalatable` on privilege-failure responses from the admin API, as the
+      worked example for adopters' own resource servers.
+- [ ] Test that expiry is silent and that a re-run resets rather than stacks.
+
+### 10. Logout and session termination — Sonnet / Sonnet
+
+- [ ] `POST /logout` revokes at Cognito before anything is cleared locally;
+      `{ everywhere: true }` calls `GlobalSignOut`.
+- [ ] `POST /session` for the browser-initiated AS session clear, with CORS
+      for allowlisted origins.
+- [ ] Admin panel and admin API can terminate all of a user's sessions.
+
+### 11. Self-driven federation — Sonnet / **Opus**
+
+- [ ] `GET /federation` with `provider` and `action=start|callback`.
+- [ ] Our own `state` and `nonce` in the identify-session JWS; validate the
+      provider's ID token (signature, `aud`, `iss`, `nonce`) on callback.
+- [ ] Provision or link the Cognito user, running the same tenant resolution
+      and initial role assignment as local signup.
+- [ ] Admin-managed provider configuration behind `admin:federation`, with
+      client secrets write-only in Secrets Manager.
+
+### 12. End-to-end coverage — Sonnet / Sonnet
+
+- [ ] Drive the full RP handoff in the live suite against the reference BFF.
+- [ ] Federation against a stub OIDC provider or a real test realm.
+- [ ] Step-up, expiry-drop, ordinary logout and logout-everywhere.
+- [ ] Reconcile with `workspace-vlinder-auth`'s `features/` scenarios.
+
+## Backlog
+
+Not scheduled; pick up when the trigger arrives.
+
+- **Self-issued tokens** — [`follow-ups/self-issued-tokens.md`](./follow-ups/self-issued-tokens.md).
+  Trigger: two identity engines live *at once*, a token shape or signing
+  algorithm Cognito cannot produce, or an external RP that shouldn't be handed
+  AWS-specific issuer details. A straight migration off Cognito is *not* a
+  trigger — step 4a's discovery document makes that one published value
+  changing. Doing this would also make that document spec-compliant, which it
+  is not today.
+- **No-code onboarding** — a self-service UI over the tenant/client/provider
+  registration interface step 2 keeps narrow.
+- **User profile surface** on `auth.<zone>`'s own tenant (avatars and the
+  like), backing the profile half of `/whoami`.
+- **Verification links as an alternative to codes.** Viable because we
+  generate and store the code ourselves, so a link embedding it needs no
+  Cognito hosted domain. A product call, not a blocker.
+- **Dual ESM+CJS retrofit** for `auth-lambda` and `auth-ui`
+  (`node-vlinder-auth#86`), and for `http-api-authorizer-lambda`
+  (`node-http-api-authorizer#16`).
+- **Mermaid validation in CI.** `markdownlint` does not parse Mermaid, so a
+  diagram with a syntax error passes every check and then renders as an error
+  box on GitHub — this has already happened once here (an HTML entity in a
+  participant alias, and a semicolon in a note, both fatal to the parser).
+  Add a `mermaid-cli` render step to `ci_lint_markdown.yml`; it needs
+  `--puppeteerConfigFile` with `--no-sandbox` on GitHub runners.
+
+## Progress log
+
+Oldest first. One entry per step completed, with what was deliberately *not*
+done alongside what was.
+
+- **2026-09-03** — Documentation restructured after a design review. The two
+  specs were rewritten to describe the intended system directly rather than
+  carrying the history of how each decision was reached; that history moved to
+  `rationale.md`. This plan replaced the ad-hoc migration sequencing that had
+  been living inside `vendor-neutral-auth.md`. Review corrections folded into
+  the specs: `client_id` resolves the tenant while email domain resolves the
+  identity provider (previously conflated); the ID token is readable by
+  front-end JS and the access token's exposure is a BFF option (previously
+  "no token touches browser JS"); privileges are
+  `verb:tenant-id:resource-glob` with gitignore globbing; scopes are
+  space-separated; the token is authoritative with no role-vs-scope
+  intersection; `/api/v1` is preserved end to end; federation is a resource
+  with the step as a parameter; we ship a reference BFF. No code changed —
+  steps 1-12 above are the resulting gap.
+
+- **2026-09-06** — Corrected the reasoning around Cognito's fixed issuer, and
+  added step 4a. The docs had treated `iss` naming Cognito as a coupling
+  defect that self-issuance would fix, and had claimed we mirror Cognito's
+  JWKS at `auth.<zone>/.well-known/jwks.json`. Both were wrong: no mirror
+  exists anywhere in the code, and the coupling is not inherent — it comes
+  entirely from consumers learning the issuer at build time instead of from a
+  published endpoint. Establishing that endpoint is required on security
+  grounds regardless (a validator that trusts the token's own `iss` pins
+  nothing), and it is separately what makes a future engine swap a one-value
+  change. Self-issued tokens stay in the backlog, but for a narrower reason —
+  issuer *ownership*, not portability — with correspondingly narrower
+  triggers. The discovery document deliberately uses the standard
+  `/.well-known/openid-configuration` path even though its `issuer` will not
+  match its host until self-issuance, which strict OIDC libraries reject; the
+  deviation is temporary, self-resolving, and documented where integrators
+  will meet it. No code changed — step 4a is the resulting gap.

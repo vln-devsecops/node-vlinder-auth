@@ -45,19 +45,20 @@ step-up — or `default` for a login-active role); see `role-management.feature`
 
 ## What "first version" means here
 
-Scope follows the migration state recorded in
-[`../vendor-neutral-auth.md`](../vendor-neutral-auth.md): the identifier-first
-login and the self-service lifecycle (sign-up / confirm / resend / forgot /
-reset) are shipped and the SPA speaks only the first-party `/api/v1/auth`
-surface. Deliberately **out of scope** for these v1 use cases, because they are
-later increments:
+Scope follows the build state recorded in [`../plan.md`](../plan.md): the
+identifier-first login and the self-service lifecycle (sign-up / confirm /
+resend / forgot / reset) are shipped and the SPA speaks only the first-party
+`/api/v1/auth` surface. Deliberately **out of scope** for these v1 use cases,
+because they are later increments:
 
 - Federated / "Continue with &lt;provider&gt;" login and signup.
-- The relying-party BFF token handoff (`/authorize` + `/token`) and
-  httpOnly-cookie sessions (v1 holds tokens in `sessionStorage`).
-- The **sudo step-up** that activates an `elevated` role — in v1 a newly
-  granted role is *recorded* as elevated but cannot yet be exercised.
+- The relying-party BFF token handoff (`/authorize` + `/token`).
+- The **sudo step-up** that activates an `elevated` role — a newly granted
+  role is *recorded* as elevated but cannot yet be exercised.
 - Admin-managed identity-provider configuration.
+
+Privileges below are written in the pre-`verb:tenant-id:resource-glob` form
+and are updated by step 1 of [`../plan.md`](../plan.md).
 
 ## Conventions
 
