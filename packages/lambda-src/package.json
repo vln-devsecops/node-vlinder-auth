@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.146",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.1",
     "@vitest/coverage-v8": "^4.1.11",
     "aws-sdk-client-mock": "^4.1.0",
     "esbuild": "^0.28.2",
