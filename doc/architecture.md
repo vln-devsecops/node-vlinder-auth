@@ -99,9 +99,14 @@ sub-paths are fixed infrastructure constants baked into the SPA, never config.
 
 Sign-in is identifier-first: the user enters an identifier, the backend
 resolves how that identifier authenticates, and the flow branches to a local
-password prompt or a redirect to an external identity provider. The auth
-Lambda verifies passwords server-side via `ADMIN_USER_PASSWORD_AUTH` and is
-the only component that speaks Cognito.
+password prompt or a redirect to an external identity provider. The browser
+never calls Cognito directly — the auth Lambda verifies the password itself,
+server-side, using Cognito's `AdminInitiateAuth` API with the
+`ADMIN_USER_PASSWORD_AUTH` flow. That call requires IAM credentials the
+Lambda holds and the browser never does, which is what makes it a
+server-side-only verification path rather than the client-facing
+`USER_PASSWORD_AUTH`/`USER_SRP_AUTH` flows a browser-side Cognito SDK would
+use. The auth Lambda is the only component that speaks Cognito at all.
 
 Consuming applications obtain tokens through an authorization-code handoff
 with PKCE; their back-end exchanges the code and decides what reaches its own
@@ -133,12 +138,12 @@ states exactly what its bearer may do, and a resource server reads its scopes
 rather than re-deriving anything.
 
 Privileges are `verb:tenant-id:resource-glob`, for example
-`refund:abc123:orders/**` or `admin:federation`. Globs are gitignore-style:
-`*` matches within a path segment, `**` traverses segments. Where the tenant
-is irrelevant, `verb:resource-glob`, `verb::resource-glob` and
-`verb:*:resource-glob` are equivalent. A bare `verb` is invalid — a privilege
-always names what it acts on. Scopes travel in tokens as a standard
-space-separated OAuth `scope` claim.
+`refund:de3828e4-2ff6-4085-a81d-2cf959e08bf9:orders/**` or `admin:federation`.
+Globs are gitignore-style: `*` matches within a path segment, `**` traverses
+segments. Where the tenant is irrelevant, `verb:resource-glob`,
+`verb::resource-glob` and `verb:*:resource-glob` are equivalent. A bare `verb`
+is invalid — a privilege always names what it acts on. Scopes travel in tokens
+as a standard space-separated OAuth `scope` claim.
 
 Two distinct lookups drive tenancy and identity-provider resolution:
 
@@ -154,7 +159,9 @@ itself — the admin panel, and later a user profile — which live in the auth
 application's own tenant.
 
 Both tenancy modes assign every user a tenant. `tenancy_mode = single` (the
-default) differs from `multi` only in that it exposes no tenant CRUD.
+default) differs from `multi` only in that it exposes no tenant CRUD. Note
+that even single-tenant deployments have at least two tenants: one for the
+adopter application itself and one for the auth application.
 
 Backed by native DynamoDB tables, all CMK-encrypted:
 
