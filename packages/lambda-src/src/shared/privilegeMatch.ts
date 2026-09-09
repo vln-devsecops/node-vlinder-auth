@@ -47,7 +47,7 @@ export function parsePrivilege(privilege: string): ParsedPrivilege | undefined {
 function segmentToRegexSource(segment: string): string {
   return segment
     .split('*')
-    .map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .map((literal) => literal.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))
     .join('[^/]*')
 }
 
