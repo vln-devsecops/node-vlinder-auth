@@ -29,19 +29,28 @@ interface GroupedUser {
   roles: AssignedRole[]
 }
 
-/** Collapses per-role assignment rows into one entry per user, gathering roles. */
+/**
+ * Collapses per-role assignment rows into one entry per (user, tenant),
+ * gathering roles. Keyed on the pair, not just userId: a caller can now
+ * query more than one tenant at once (a tenant-wildcard grant, or several
+ * tenant-scoped ones), and the same user can hold assignments in more than
+ * one of them -- collapsing solely on userId would silently merge a second
+ * tenant's roles into the first tenant's entry, misattributing which tenant
+ * granted them.
+ */
 function groupByUser(rows: AssignmentRow[]): GroupedUser[] {
-  const byUser = new Map<string, GroupedUser>()
+  const byUserAndTenant = new Map<string, GroupedUser>()
   for (const row of rows) {
     const role: AssignedRole = { roleId: row.roleId, activation: row.activation ?? 'default' }
-    const existing = byUser.get(row.userId)
+    const key = `${row.userId}#${row.tenantId}`
+    const existing = byUserAndTenant.get(key)
     if (existing) {
       existing.roles.push(role)
     } else {
-      byUser.set(row.userId, { userId: row.userId, tenantId: row.tenantId, roles: [role] })
+      byUserAndTenant.set(key, { userId: row.userId, tenantId: row.tenantId, roles: [role] })
     }
   }
-  return [...byUser.values()]
+  return [...byUserAndTenant.values()]
 }
 
 export interface ListUsersParams {

@@ -74,29 +74,31 @@ export async function resolvePrivilegesForUser(
     return { tenants: [], roleIds: [], privileges: [] }
   }
 
-  const roleIds: string[] = []
-  const privileges: string[] = []
-
-  for (const { tenantId, roles } of assignments.tenants) {
-    const activeRoleIds = roles
+  // One flat list of (tenant, active role) pairs across every tenant the
+  // user holds, so every getRoleDefinition lookup fires in a single
+  // Promise.all instead of one round per tenant -- this runs inside the
+  // synchronous, timeout-sensitive Cognito pre-token-generation trigger, so
+  // latency should depend on the slowest single lookup, not the number of
+  // tenants the user happens to be logged in on.
+  const activeAssignments = assignments.tenants.flatMap(({ tenantId, roles }) =>
+    roles
       .filter((role) => role.activation === 'default')
-      .map((role) => role.roleId)
+      .map((role) => ({ tenantId, roleId: role.roleId })),
+  )
 
-    const roleDefinitions = await Promise.all(
-      activeRoleIds.map((roleId) =>
-        getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
-      ),
-    )
+  const roleDefinitions = await Promise.all(
+    activeAssignments.map(({ roleId }) =>
+      getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
+    ),
+  )
 
-    roleIds.push(...activeRoleIds)
-    for (const role of roleDefinitions) {
-      privileges.push(...bindRolePrivileges(role, tenantId))
-    }
-  }
+  const privileges = activeAssignments.flatMap(({ tenantId }, index) =>
+    bindRolePrivileges(roleDefinitions[index], tenantId),
+  )
 
   return {
     tenants: assignments.tenants.map((tenant) => tenant.tenantId),
-    roleIds,
+    roleIds: activeAssignments.map(({ roleId }) => roleId),
     privileges: [...new Set(privileges)],
   }
 }

@@ -3,10 +3,10 @@ import {
   AdminEnableUserCommand,
   type CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
 import { ADMIN_USERS_WRITE } from '../privileges'
-import { NotFoundError } from './getUser'
+import { loadTargetUsersSoleTenant } from '../targetTenant'
 
 export interface SetUserEnabledParams {
   caller: CallerContext
@@ -30,21 +30,13 @@ export async function setUserEnabled(params: SetUserEnabledParams): Promise<void
     userPoolId,
   } = params
 
-  const result = await ddbDocClient.send(
-    new QueryCommand({
-      TableName: roleAssignmentsTableName,
-      KeyConditionExpression: 'userId = :u',
-      ExpressionAttributeValues: { ':u': targetUserId },
-      Limit: 1,
-    }),
+  const { tenantId } = await loadTargetUsersSoleTenant(
+    ddbDocClient,
+    roleAssignmentsTableName,
+    targetUserId,
   )
 
-  const assignment = result.Items?.[0] as { tenantId: string } | undefined
-  if (!assignment) {
-    throw new NotFoundError(`No user found with id ${targetUserId}`)
-  }
-
-  assertTenantAccess(caller, ADMIN_USERS_WRITE, assignment.tenantId)
+  assertTenantAccess(caller, ADMIN_USERS_WRITE, tenantId)
 
   const command = enabled
     ? new AdminEnableUserCommand({ UserPoolId: userPoolId, Username: targetUserId })

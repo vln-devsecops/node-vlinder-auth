@@ -500,3 +500,33 @@ done alongside what was.
   one was genuinely dead (nothing read it); this one is load-bearing, since
   it's what every wildcard match is capped against. Reflected in
   `terraform-modules`' `vlinder_auth` README (same PR #133).
+
+  A fifth Opus pass on the multi-tenant correction caught a real,
+  confirmed-live-in-Terraform cross-repo gap: `vlinder_auth`'s
+  `admin_api_authorizer` still set `jwt_forward_claims = ["tenantId",
+  "permissions", "scope"]`, forwarding two retired claim names and never
+  forwarding `tenants` at all -- `extractCallerContext` would have silently
+  read `caller.tenants` as always-empty in production, 403ing every
+  tenant-scoped admin action with no error pointing at the cause. Fixed to
+  `["tenants", "scope"]`; added a contract test asserting exactly those two
+  claim names are forwarded (`admin_api.tftest.hcl`), which needed a new
+  `jwt_forward_claims` output on `http_api_authorizer` since module
+  encapsulation otherwise hides it. It also found three real correctness
+  gaps in this repo, all fixed: `listUsers`' row-grouping keyed solely on
+  `userId`, so a user with assignments in two of the caller's queried
+  tenants had the second tenant's roles silently merged into the first
+  tenant's entry, misattributing which tenant granted them -- now keyed on
+  `(userId, tenantId)`. `getUser`/`assignRole`/`revokeRole`/`setUserEnabled`
+  each anchored to an arbitrary single row (`rows[0]` or a `Limit: 1`
+  query) when looking up a *target* user's tenant, silently dropping or
+  misauthorizing against any other tenant that target held -- unreachable
+  today (no admin-api action can create a target user with assignments in
+  more than one tenant yet) but a live trap now that the data model
+  formally supports it. Replaced with a shared
+  `admin-api/targetTenant.ts#loadTargetUsersSoleTenant`, which throws
+  loudly on a multi-tenant target instead of silently picking one --
+  consolidating four copies of the same lookup into one as a side effect.
+  Also fixed: `resolvePrivilegesForUser` resolved each tenant's role
+  definitions in a sequential loop instead of one `Promise.all` across
+  every tenant, adding avoidable per-tenant latency inside the
+  timeout-sensitive Cognito pre-token-generation trigger.

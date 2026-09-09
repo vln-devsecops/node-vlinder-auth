@@ -216,4 +216,35 @@ describe('listUsers', () => {
     expect(result).toBeInstanceOf(ForbiddenError)
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0)
   })
+
+  it('does not merge one user\'s roles across tenants when they hold assignments in more than one queried tenant', async () => {
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'acme-corp' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'tenant-admin' }] })
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'globex' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'globex', roleId: 'member' }] })
+    cognitoMock.on(AdminGetUserCommand).resolves({
+      Enabled: true,
+      UserStatus: 'CONFIRMED',
+      UserAttributes: [{ Name: 'email', Value: 'user1@example.com' }],
+    })
+
+    const result = await listUsers({
+      caller: { tenants: ['acme-corp', 'globex'], scopes: ['read:*:admin/users'] },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    })
+
+    // Same person, two separate tenant memberships -- each with only its
+    // own tenant's role, not merged into one entry under one tenantId.
+    expect(result.users).toHaveLength(2)
+    const byTenant = new Map(result.users.map((u) => [u.tenantId, u]))
+    expect(byTenant.get('acme-corp')?.roles).toEqual([
+      { roleId: 'tenant-admin', activation: 'default' },
+    ])
+    expect(byTenant.get('globex')?.roles).toEqual([{ roleId: 'member', activation: 'default' }])
+  })
 })

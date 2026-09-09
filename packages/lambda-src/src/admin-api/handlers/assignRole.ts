@@ -1,9 +1,9 @@
-import { PutCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import { PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
 import { ADMIN_USERS_WRITE } from '../privileges'
+import { loadTargetUsersSoleTenant } from '../targetTenant'
 import { tenantRoleKey } from '../../shared/roleAssignments'
 import type { RoleActivation } from '../../shared/types'
-import { NotFoundError } from './getUser'
 
 export interface AssignRoleParams {
   caller: CallerContext
@@ -37,29 +37,21 @@ export async function assignRole(params: AssignRoleParams): Promise<void> {
     roleAssignmentsTableName,
   } = params
 
-  const result = await ddbDocClient.send(
-    new QueryCommand({
-      TableName: roleAssignmentsTableName,
-      KeyConditionExpression: 'userId = :u',
-      ExpressionAttributeValues: { ':u': targetUserId },
-      Limit: 1,
-    }),
+  const { tenantId } = await loadTargetUsersSoleTenant(
+    ddbDocClient,
+    roleAssignmentsTableName,
+    targetUserId,
   )
 
-  const assignment = result.Items?.[0] as { tenantId: string } | undefined
-  if (!assignment) {
-    throw new NotFoundError(`No user found with id ${targetUserId}`)
-  }
-
-  assertTenantAccess(caller, ADMIN_USERS_WRITE, assignment.tenantId)
+  assertTenantAccess(caller, ADMIN_USERS_WRITE, tenantId)
 
   await ddbDocClient.send(
     new PutCommand({
       TableName: roleAssignmentsTableName,
       Item: {
         userId: targetUserId,
-        tenantRole: tenantRoleKey(assignment.tenantId, roleId),
-        tenantId: assignment.tenantId,
+        tenantRole: tenantRoleKey(tenantId, roleId),
+        tenantId,
         roleId,
         activation,
       },
