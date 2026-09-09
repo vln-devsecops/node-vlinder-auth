@@ -3,6 +3,7 @@ import {
   resolveGrantedTenant,
   type GrantedTenantScope,
   type RequiredPrivilege,
+  type TenantAgnosticPrivilege,
 } from '../shared/privilegeMatch'
 
 export class ForbiddenError extends Error {
@@ -38,10 +39,7 @@ export function extractCallerContext(claims: Record<string, string | undefined>)
   }
 }
 
-export type { RequiredPrivilege }
-
-/** A privilege check with no tenant opinion of its own -- see {@link RequiredPrivilege.tenantId}. */
-export type TenantAgnosticPrivilege = Omit<RequiredPrivilege, 'tenantId'>
+export type { RequiredPrivilege, TenantAgnosticPrivilege }
 
 /** Whether the caller holds a privilege matching `required`, tenant included if given. */
 export function callerHasPrivilege(caller: CallerContext, required: RequiredPrivilege): boolean {

@@ -445,3 +445,33 @@ done alongside what was.
   another. The `tenantId` claim itself is untouched at the token level --
   other consumers (e.g. the SPA, for display) may still read it; only the
   admin API's own authorization stopped treating it as an input.
+
+  A fourth Opus pass, prompted by the fix above, found the core matcher
+  logic solid (as expected, having already been through three review
+  rounds) but caught documentation drift this PR's own commits should have
+  caught: this repo's top-level `README.md` still documented the retired
+  `permissions` claim and `<family>:own`/`<family>:*` convention as current,
+  contradicting `doc/architecture.md` and the shipped code; `doc/use-cases/README.md`'s
+  Layout table still described `access-scope.feature` in the old `own`/`*`
+  terms a few lines above its own already-updated section. Both fixed. Also
+  fixed: `resolveGrantedTenant` redeclared `{ verb, resource }` inline
+  instead of reusing the shared privilege-check shape (moved
+  `TenantAgnosticPrivilege` into `privilegeMatch.ts` itself, where
+  `RequiredPrivilege` lives, so `admin-api/authz.ts` re-exports rather than
+  redeclares it).
+
+  The same pass also surfaced a genuine cross-repo break: `terraform-modules`'
+  `vlinder_auth` module still seeds its default `admin` role (and both
+  README examples, and `rbac.tftest.hcl`'s fixtures) in the old
+  `admin:users:read:own` form, which the new `parsePrivilege` rejects
+  outright -- every deployment using the default role catalog would get a
+  total admin lockout (every admin API call 403s) the moment it picks up
+  this lambda-src version. Fixed directly in `terraform-modules` on
+  `feature/cognito-auth-module` (the existing draft PR #133 already
+  accumulating the unmerged `vlinder_auth` module -- not yet on `main`, so
+  no live deployment was ever actually at risk): default catalog and both
+  README examples now seed tenant-scoped roles with tenant-irrelevant
+  privilege templates and global-scoped roles with the explicit
+  `verb:*:resource-glob` form, matching the binding behavior
+  `bindRolePrivileges` implements on this side; `rbac.tftest.hcl` updated to
+  match and reverified (`terraform test`, 57/57 passing).

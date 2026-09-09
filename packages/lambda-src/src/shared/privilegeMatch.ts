@@ -128,6 +128,9 @@ export interface RequiredPrivilege {
   tenantId?: string
 }
 
+/** A privilege check with no tenant opinion of its own -- see {@link RequiredPrivilege.tenantId}. */
+export type TenantAgnosticPrivilege = Omit<RequiredPrivilege, 'tenantId'>
+
 function grantSatisfies(grant: ParsedPrivilege, required: RequiredPrivilege): boolean {
   if (grant.verb !== required.verb) {
     return false
@@ -163,7 +166,7 @@ export type GrantedTenantScope =
  */
 export function resolveGrantedTenant(
   grants: string[],
-  required: { verb: string; resource: string },
+  required: TenantAgnosticPrivilege,
 ): GrantedTenantScope {
   const ownTenantIds = new Set<string>()
 

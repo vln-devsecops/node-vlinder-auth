@@ -23,7 +23,7 @@ definitions, a real browser, and real Cognito/DynamoDB — live in
 | `end-user/session.feature` | End user | Redirect to sign-in for a protected page without a session; shared session across the site |
 | `admin/user-management.feature` | Admin | List users (tenant-scoped), view a user, enable/disable, stale-assignment tolerance |
 | `admin/role-management.feature` | Admin | List the role catalog, grant/revoke roles, elevated-by-default grant, idempotency |
-| `admin/access-scope.feature` | Admin | `own` vs `*` tenant-scope enforcement, ungated reference data, missing-privilege refusal |
+| `admin/access-scope.feature` | Admin | Tenant-scoped vs tenant-wildcard grant enforcement, ungated reference data, missing-privilege refusal |
 
 ### Admin actions (v1)
 
