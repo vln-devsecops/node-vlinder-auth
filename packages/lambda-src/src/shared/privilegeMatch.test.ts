@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasPrivilege, parsePrivilege, resolveGrantedTenant } from './privilegeMatch'
+import { hasPrivilege, matchesResourceGlob, parsePrivilege, resolveGrantedTenant } from './privilegeMatch'
 
 describe('parsePrivilege', () => {
   it('parses the full verb:tenant-id:resource-glob form', () => {
@@ -133,6 +133,18 @@ describe('hasPrivilege - resource glob matching', () => {
         resource: 'orders/123',
       }),
     ).toBe(false)
+  })
+
+  it('stays fast against many non-adjacent "**" segments (no unmemoized backtracking blowup)', () => {
+    const pattern = Array.from({ length: 12 }, (_, i) => `**/seg${i}`).join('/')
+    const resource = Array.from({ length: 40 }, (_, i) => `noise${i}`).join('/')
+
+    const start = performance.now()
+    const result = matchesResourceGlob(pattern, resource)
+    const elapsedMs = performance.now() - start
+
+    expect(result).toBe(false)
+    expect(elapsedMs).toBeLessThan(500)
   })
 
   it('a bare "**" matches every resource, including the empty one', () => {

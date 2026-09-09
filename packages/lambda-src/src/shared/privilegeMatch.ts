@@ -69,11 +69,30 @@ export function matchesResourceGlob(pattern: string, resource: string): boolean 
     segment === '**' ? undefined : new RegExp(`^${segmentToRegexSource(segment)}$`),
   )
 
+  // Memoized on (patternIndex, resourceIndex): without this, a pattern with
+  // several non-adjacent "**" segments backtracks combinatorially -- each one
+  // retries every remaining split point, and splits compound across several
+  // "**"s. Memoizing collapses that back to one evaluation per pair, i.e.
+  // O(patternSegments x resourceSegments) instead of exponential.
+  const memo = new Map<string, boolean>()
+
   function matchFrom(patternIndex: number, resourceIndex: number): boolean {
     if (patternIndex === patternSegments.length) {
       return resourceIndex === resourceSegments.length
     }
 
+    const key = `${patternIndex},${resourceIndex}`
+    const cached = memo.get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+
+    const result = matchSegmentFrom(patternIndex, resourceIndex)
+    memo.set(key, result)
+    return result
+  }
+
+  function matchSegmentFrom(patternIndex: number, resourceIndex: number): boolean {
     const segment = patternSegments[patternIndex]
 
     if (segment === '**') {

@@ -399,3 +399,18 @@ done alongside what was.
   Not addressed, deliberately: the claim-rename (`permissions` → `scope`)
   creating a deployment-window lockout for already-issued tokens — moot per
   this plan's "Current state" (nothing is deployed, no installed base).
+
+  A second Opus review pass on the fixes confirmed both bugs resolved and
+  caught one more: `matchesResourceGlob`'s recursive `**` walk had no
+  memoization, making it exponential in the number of non-adjacent `**`
+  segments crossed with the resource's segment length (empirically ~24s at
+  10 non-adjacent `**`s, unbounded beyond that). Not reachable through
+  today's call sites (fixed 2-segment `admin/users`/`admin/roles` resources),
+  but `privilegeMatch.ts` is shared infrastructure for general
+  `verb:tenant:resource-glob` matching that runs on every admin-api
+  authorization check, so a future deeper resource hierarchy or a typo'd
+  catalog entry with several `**`s would turn this into a CPU-exhaustion /
+  Lambda-timeout DoS on the authorization hot path. Fixed with memoization
+  on `(patternIndex, resourceIndex)`, collapsing it to
+  O(patternSegments × resourceSegments); regression test asserts a
+  12-non-adjacent-`**` pattern resolves in under 500ms.
