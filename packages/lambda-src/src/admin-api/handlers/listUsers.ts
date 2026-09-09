@@ -4,9 +4,8 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { QueryCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { resolveCallerTenantScope, ForbiddenError, type CallerContext } from '../authz'
+import { ADMIN_USERS_READ } from '../privileges'
 import type { AssignedRole, RoleActivation } from '../../shared/types'
-
-const REQUIRED_PRIVILEGE = { verb: 'read', resource: 'admin/users' }
 
 export interface AdminUserSummary {
   userId: string
@@ -58,27 +57,27 @@ export interface ListUsersResult {
 }
 
 /**
- * Lists users the caller is permitted to see: the one tenant a tenant-scoped
- * grant names, or every tenant for a tenant-wildcard (super-admin) grant --
- * the same mechanism as the token's privilege check, just applied to a
- * listing instead of a single target. The tenant to query comes from the
- * grant itself, not a separate `tenantId` claim, so there is exactly one
- * authoritative source.
+ * Lists users the caller is permitted to see: the tenant(s) named by their
+ * tenant-scoped grants (a caller can hold more than one), or every tenant
+ * for a tenant-wildcard (super-admin) grant -- the same mechanism as the
+ * token's privilege check, just applied to a listing instead of a single
+ * target. The tenant(s) to query come from the grants themselves, not a
+ * separate `tenantId` claim, so there is exactly one authoritative source.
  */
 export async function listUsers(params: ListUsersParams): Promise<ListUsersResult> {
   const { caller, ddbDocClient, cognitoClient, roleAssignmentsTableName, userPoolId } = params
 
-  const granted = resolveCallerTenantScope(caller, REQUIRED_PRIVILEGE)
+  const granted = resolveCallerTenantScope(caller, ADMIN_USERS_READ)
   if (granted.scope === 'none') {
     throw new ForbiddenError(
-      `Missing privilege ${REQUIRED_PRIVILEGE.verb}:${REQUIRED_PRIVILEGE.resource}`,
+      `Missing privilege ${ADMIN_USERS_READ.verb}:${ADMIN_USERS_READ.resource}`,
     )
   }
 
   const assignments =
     granted.scope === 'global'
       ? await scanAllAssignments(ddbDocClient, roleAssignmentsTableName)
-      : await queryTenantAssignments(ddbDocClient, roleAssignmentsTableName, granted.tenantId)
+      : await queryTenantsAssignments(ddbDocClient, roleAssignmentsTableName, granted.tenantIds)
 
   const users = await Promise.all(
     groupByUser(assignments).map((user) => hydrateUser(user, cognitoClient, userPoolId)),
@@ -101,6 +100,18 @@ async function queryTenantAssignments(
     }),
   )
   return (result.Items ?? []) as AssignmentRow[]
+}
+
+/** Queries each granted tenant independently and flattens the results. */
+async function queryTenantsAssignments(
+  ddbDocClient: DynamoDBDocumentClient,
+  tableName: string,
+  tenantIds: string[],
+): Promise<AssignmentRow[]> {
+  const perTenant = await Promise.all(
+    tenantIds.map((tenantId) => queryTenantAssignments(ddbDocClient, tableName, tenantId)),
+  )
+  return perTenant.flat()
 }
 
 async function scanAllAssignments(

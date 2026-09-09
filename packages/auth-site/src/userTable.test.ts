@@ -24,8 +24,8 @@ const users: AdminUser[] = [
 
 const roles: RoleDefinition[] = [
   { roleId: 'member', privileges: [], tenantScope: 'tenant' },
-  { roleId: 'tenant-admin', privileges: ['read:acme-corp:admin/users'], tenantScope: 'tenant' },
-  { roleId: 'billing', privileges: ['write:acme-corp:billing'], tenantScope: 'tenant' },
+  { roleId: 'tenant-admin', privileges: ['read:admin/users'], tenantScope: 'tenant' },
+  { roleId: 'billing', privileges: ['write:billing'], tenantScope: 'tenant' },
 ]
 
 describe('filterUsers', () => {

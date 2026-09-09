@@ -1,8 +1,7 @@
 import { ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { callerHasPrivilege, ForbiddenError, type CallerContext } from '../authz'
+import { ADMIN_ROLES_READ } from '../privileges'
 import type { RoleDefinition } from '../../shared/types'
-
-const REQUIRED_PRIVILEGE = { verb: 'read', resource: 'admin/roles' }
 
 export interface ListRolesParams {
   caller: CallerContext
@@ -22,9 +21,9 @@ export interface ListRolesResult {
 export async function listRoles(params: ListRolesParams): Promise<ListRolesResult> {
   const { caller, ddbDocClient, rolesTableName } = params
 
-  if (!callerHasPrivilege(caller, REQUIRED_PRIVILEGE)) {
+  if (!callerHasPrivilege(caller, ADMIN_ROLES_READ)) {
     throw new ForbiddenError(
-      `Missing privilege ${REQUIRED_PRIVILEGE.verb}:${REQUIRED_PRIVILEGE.resource}`,
+      `Missing privilege ${ADMIN_ROLES_READ.verb}:${ADMIN_ROLES_READ.resource}`,
     )
   }
 

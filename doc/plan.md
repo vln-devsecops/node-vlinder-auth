@@ -377,3 +377,25 @@ done alongside what was.
   `admin/*.feature` files, updated to the new form. No Terraform-seeded role
   catalog exists in this repo to update — that data lives in
   `terraform-modules`, out of this repo's scope.
+
+  Opus review (required for this security-critical step) caught a real gap
+  the first pass missed: `RoleDefinition.tenantScope` was read from DynamoDB
+  but never used, so a `tenant`-scoped role's catalog privileges had nowhere
+  to pick up the caller's actual tenant — the fixtures I'd written happened
+  to bake a matching tenant-id directly into the catalog entry, which masked
+  it. Fixed by having `resolvePrivilegesForUser` bind a `tenant`-scoped
+  role's privileges to the caller's resolved tenant at resolution time
+  (`shared/privileges.ts`'s new `bindRolePrivileges`), so the catalog itself
+  stores reusable, tenant-irrelevant privilege templates and only becomes
+  tenant-concrete at token issuance; `global`-scoped roles pass through
+  unchanged. The review also caught `resolveGrantedTenant` collapsing several
+  tenant-scoped grants down to the last one seen instead of collecting all of
+  them (a caller holding grants in two tenants would silently see only one in
+  `listUsers`) — fixed to return `tenantIds: string[]`, with `listUsers`
+  querying each and unioning the results. Also addressed: unmemoized
+  per-backtrack regex compilation in `matchesResourceGlob` (precomputed once
+  per call instead), and five handlers each redeclaring an identical
+  `{ verb, resource }` literal (consolidated into `admin-api/privileges.ts`).
+  Not addressed, deliberately: the claim-rename (`permissions` → `scope`)
+  creating a deployment-window lockout for already-issued tokens — moot per
+  this plan's "Current state" (nothing is deployed, no installed base).

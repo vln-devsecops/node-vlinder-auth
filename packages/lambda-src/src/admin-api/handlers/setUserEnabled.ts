@@ -5,9 +5,8 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
+import { ADMIN_USERS_WRITE } from '../privileges'
 import { NotFoundError } from './getUser'
-
-const REQUIRED_PRIVILEGE = { verb: 'write', resource: 'admin/users' }
 
 export interface SetUserEnabledParams {
   caller: CallerContext
@@ -45,7 +44,7 @@ export async function setUserEnabled(params: SetUserEnabledParams): Promise<void
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
-  assertTenantAccess(caller, REQUIRED_PRIVILEGE, assignment.tenantId)
+  assertTenantAccess(caller, ADMIN_USERS_WRITE, assignment.tenantId)
 
   const command = enabled
     ? new AdminEnableUserCommand({ UserPoolId: userPoolId, Username: targetUserId })

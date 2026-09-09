@@ -230,7 +230,25 @@ describe('resolveGrantedTenant', () => {
         verb: 'read',
         resource: 'admin/users',
       }),
-    ).toEqual({ scope: 'own', tenantId: 'acme-corp' })
+    ).toEqual({ scope: 'own', tenantIds: ['acme-corp'] })
+  })
+
+  it('collects every distinct tenant when the caller holds several tenant-scoped grants', () => {
+    expect(
+      resolveGrantedTenant(['read:acme-corp:admin/users', 'read:globex:admin/users'], {
+        verb: 'read',
+        resource: 'admin/users',
+      }),
+    ).toEqual({ scope: 'own', tenantIds: ['acme-corp', 'globex'] })
+  })
+
+  it('dedupes a tenant granted by more than one matching privilege', () => {
+    expect(
+      resolveGrantedTenant(
+        ['read:acme-corp:admin/users', 'read:acme-corp:admin/**'],
+        { verb: 'read', resource: 'admin/users' },
+      ),
+    ).toEqual({ scope: 'own', tenantIds: ['acme-corp'] })
   })
 
   it('returns "global" for a wildcard-tenant grant', () => {

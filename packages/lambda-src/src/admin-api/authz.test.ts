@@ -64,7 +64,7 @@ describe('resolveCallerTenantScope', () => {
       { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
       { verb: 'read', resource: 'admin/users' },
     )
-    expect(granted).toEqual({ scope: 'own', tenantId: 'acme-corp' })
+    expect(granted).toEqual({ scope: 'own', tenantIds: ['acme-corp'] })
   })
 
   it('returns "none" when the caller holds neither variant', () => {

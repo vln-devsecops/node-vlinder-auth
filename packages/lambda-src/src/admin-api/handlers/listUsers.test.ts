@@ -182,4 +182,32 @@ describe('listUsers', () => {
       ExpressionAttributeValues: { ':t': 'acme-corp' },
     })
   })
+
+  it('unions results across every tenant named by a caller holding several tenant-scoped grants', async () => {
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'acme-corp' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }] })
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'globex' } })
+      .resolves({ Items: [{ userId: 'user-2', tenantId: 'globex', roleId: 'member' }] })
+    cognitoMock.on(AdminGetUserCommand).resolves({
+      Enabled: true,
+      UserStatus: 'CONFIRMED',
+      UserAttributes: [{ Name: 'email', Value: 'someone@example.com' }],
+    })
+
+    const result = await listUsers({
+      caller: {
+        tenantId: 'acme-corp',
+        scopes: ['read:acme-corp:admin/users', 'read:globex:admin/users'],
+      },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    })
+
+    expect(ddbMock.commandCalls(ScanCommand)).toHaveLength(0)
+    expect(result.users.map((u) => u.tenantId).sort()).toEqual(['acme-corp', 'globex'])
+  })
 })

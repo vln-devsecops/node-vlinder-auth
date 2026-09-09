@@ -4,10 +4,9 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
+import { ADMIN_USERS_READ } from '../privileges'
 import type { AssignedRole, RoleActivation } from '../../shared/types'
 import type { AdminUserSummary } from './listUsers'
-
-const REQUIRED_PRIVILEGE = { verb: 'read', resource: 'admin/users' }
 
 export class NotFoundError extends Error {
   constructor(message: string) {
@@ -52,7 +51,7 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
     .filter((row) => row.tenantId === tenantId)
     .map((row) => ({ roleId: row.roleId, activation: row.activation ?? 'default' }))
 
-  assertTenantAccess(caller, REQUIRED_PRIVILEGE, tenantId)
+  assertTenantAccess(caller, ADMIN_USERS_READ, tenantId)
 
   const cognitoUser = await cognitoClient.send(
     new AdminGetUserCommand({ UserPoolId: userPoolId, Username: targetUserId }),

@@ -1,5 +1,7 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import { parsePrivilege } from './privilegeMatch'
 import { getRoleDefinition, resolveUserRoleAssignments } from './roles'
+import type { RoleDefinition } from './types'
 
 export interface ResolvePrivilegesForUserParams {
   userId: string
@@ -13,6 +15,28 @@ export interface ResolvedPrivileges {
   /** The active (default) roles whose privileges are unioned into the token. */
   roleIds: string[]
   privileges: string[]
+}
+
+/**
+ * A `tenantScope: 'tenant'` role's catalog entry is written in
+ * tenant-irrelevant form (e.g. `read:users`, reusable across every tenant it
+ * is assigned in) -- the concrete tenant is bound here, at resolution time,
+ * from the caller's own resolved assignment, overriding whatever tenant
+ * segment the catalog entry carries. A `tenantScope: 'global'` role's
+ * privileges (typically already tenant-wildcard, e.g. `write:*:users`) pass
+ * through untouched, since they aren't meant to be confined to one tenant.
+ */
+function bindRolePrivileges(role: RoleDefinition | undefined, tenantId: string): string[] {
+  if (!role) {
+    return []
+  }
+  if (role.tenantScope === 'global') {
+    return role.privileges
+  }
+  return role.privileges.map((privilege) => {
+    const parsed = parsePrivilege(privilege)
+    return parsed === undefined ? privilege : `${parsed.verb}:${tenantId}:${parsed.resource}`
+  })
 }
 
 /**
@@ -49,7 +73,11 @@ export async function resolvePrivilegesForUser(
     ),
   )
 
-  const privileges = [...new Set(roleDefinitions.flatMap((role) => role?.privileges ?? []))]
+  const privileges = [
+    ...new Set(
+      roleDefinitions.flatMap((role) => bindRolePrivileges(role, assignments.tenantId)),
+    ),
+  ]
 
   return {
     tenantId: assignments.tenantId,

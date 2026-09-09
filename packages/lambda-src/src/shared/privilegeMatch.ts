@@ -62,6 +62,12 @@ function segmentToRegexSource(segment: string): string {
 export function matchesResourceGlob(pattern: string, resource: string): boolean {
   const patternSegments = pattern.split('/')
   const resourceSegments = resource.split('/')
+  // Built once per call, not per backtrack -- a pattern's segments are fixed
+  // for the whole walk, so compiling each segment's regex on every retry
+  // through a "**" would be pure waste.
+  const segmentRegexes = patternSegments.map((segment) =>
+    segment === '**' ? undefined : new RegExp(`^${segmentToRegexSource(segment)}$`),
+  )
 
   function matchFrom(patternIndex: number, resourceIndex: number): boolean {
     if (patternIndex === patternSegments.length) {
@@ -84,7 +90,7 @@ export function matchesResourceGlob(pattern: string, resource: string): boolean 
       return false
     }
 
-    const regex = new RegExp(`^${segmentToRegexSource(segment)}$`)
+    const regex = segmentRegexes[patternIndex]!
     return regex.test(resourceSegments[resourceIndex]) && matchFrom(patternIndex + 1, resourceIndex + 1)
   }
 
@@ -123,19 +129,24 @@ export function hasPrivilege(grants: string[], required: RequiredPrivilege): boo
   })
 }
 
-export type GrantedTenantScope = { scope: 'global' } | { scope: 'own'; tenantId: string } | { scope: 'none' }
+export type GrantedTenantScope =
+  | { scope: 'global' }
+  | { scope: 'own'; tenantIds: string[] }
+  | { scope: 'none' }
 
 /**
  * For listing-style checks that need to know *which* tenant(s) a caller may
  * see, not just whether they may see one in particular. Prefers `global`
- * (a tenant-wildcard grant) even when a same-caller own-tenant grant also
- * matches, since global strictly subsumes it.
+ * (a tenant-wildcard grant) even when tenant-scoped grants also match, since
+ * global strictly subsumes them. A caller can hold several tenant-scoped
+ * grants at once (e.g. distinct roles in distinct tenants), so `own`
+ * collects every matching tenant rather than keeping only the last one seen.
  */
 export function resolveGrantedTenant(
   grants: string[],
   required: { verb: string; resource: string },
 ): GrantedTenantScope {
-  let ownTenantId: string | undefined
+  const ownTenantIds = new Set<string>()
 
   for (const raw of grants) {
     const parsed = parsePrivilege(raw)
@@ -148,8 +159,8 @@ export function resolveGrantedTenant(
     if (parsed.tenantId === undefined) {
       return { scope: 'global' }
     }
-    ownTenantId = parsed.tenantId
+    ownTenantIds.add(parsed.tenantId)
   }
 
-  return ownTenantId === undefined ? { scope: 'none' } : { scope: 'own', tenantId: ownTenantId }
+  return ownTenantIds.size === 0 ? { scope: 'none' } : { scope: 'own', tenantIds: [...ownTenantIds] }
 }

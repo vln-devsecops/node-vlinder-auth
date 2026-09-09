@@ -1,10 +1,9 @@
 import { PutCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
+import { ADMIN_USERS_WRITE } from '../privileges'
 import { tenantRoleKey } from '../../shared/roleAssignments'
 import type { RoleActivation } from '../../shared/types'
 import { NotFoundError } from './getUser'
-
-const REQUIRED_PRIVILEGE = { verb: 'write', resource: 'admin/users' }
 
 export interface AssignRoleParams {
   caller: CallerContext
@@ -52,7 +51,7 @@ export async function assignRole(params: AssignRoleParams): Promise<void> {
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
-  assertTenantAccess(caller, REQUIRED_PRIVILEGE, assignment.tenantId)
+  assertTenantAccess(caller, ADMIN_USERS_WRITE, assignment.tenantId)
 
   await ddbDocClient.send(
     new PutCommand({

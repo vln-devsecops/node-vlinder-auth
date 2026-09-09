@@ -15,7 +15,7 @@ describe('listRoles', () => {
     ddbMock.on(ScanCommand).resolves({
       Items: [
         { roleId: 'member', privileges: [], tenantScope: 'tenant' },
-        { roleId: 'admin', privileges: ['read:acme-corp:admin/users'], tenantScope: 'tenant' },
+        { roleId: 'admin', privileges: ['read:admin/users'], tenantScope: 'tenant' },
       ],
     })
 
@@ -27,7 +27,7 @@ describe('listRoles', () => {
 
     expect(result.roles).toEqual([
       { roleId: 'member', privileges: [], tenantScope: 'tenant' },
-      { roleId: 'admin', privileges: ['read:acme-corp:admin/users'], tenantScope: 'tenant' },
+      { roleId: 'admin', privileges: ['read:admin/users'], tenantScope: 'tenant' },
     ])
   })
 
