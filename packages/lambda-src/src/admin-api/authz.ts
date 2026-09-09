@@ -38,6 +38,9 @@ export function extractCallerContext(claims: Record<string, string | undefined>)
 
 export type { RequiredPrivilege }
 
+/** A privilege check with no tenant opinion of its own -- see {@link RequiredPrivilege.tenantId}. */
+export type TenantAgnosticPrivilege = Omit<RequiredPrivilege, 'tenantId'>
+
 /** Whether the caller holds a privilege matching `required`, tenant included if given. */
 export function callerHasPrivilege(caller: CallerContext, required: RequiredPrivilege): boolean {
   return hasPrivilege(caller.scopes, required)
@@ -46,7 +49,7 @@ export function callerHasPrivilege(caller: CallerContext, required: RequiredPriv
 /** Which tenant(s), if any, the caller's scopes grant `required` access to. */
 export function resolveCallerTenantScope(
   caller: CallerContext,
-  required: { verb: string; resource: string },
+  required: TenantAgnosticPrivilege,
 ): GrantedTenantScope {
   return resolveGrantedTenant(caller.scopes, required)
 }
@@ -54,7 +57,7 @@ export function resolveCallerTenantScope(
 /** Throws ForbiddenError unless the caller holds `required` for targetTenantId. */
 export function assertTenantAccess(
   caller: CallerContext,
-  required: { verb: string; resource: string },
+  required: TenantAgnosticPrivilege,
   targetTenantId: string,
 ): void {
   if (!callerHasPrivilege(caller, { ...required, tenantId: targetTenantId })) {

@@ -25,6 +25,14 @@ export interface ResolvedPrivileges {
  * segment the catalog entry carries. A `tenantScope: 'global'` role's
  * privileges (typically already tenant-wildcard, e.g. `write:*:users`) pass
  * through untouched, since they aren't meant to be confined to one tenant.
+ *
+ * `tenantScope` is per-*role*, not per-privilege: every privilege on a
+ * `tenant`-scoped role is bound, with no way for one of its privileges to
+ * opt out and stay universal. A role that needs to grant both a
+ * tenant-confined privilege and a genuinely tenant-agnostic one should be
+ * split into two catalog entries -- one `tenant`-scoped, one `global`-scoped
+ * -- and assigned together; `resolvePrivilegesForUser` already unions
+ * privileges across every role a user holds.
  */
 function bindRolePrivileges(role: RoleDefinition | undefined, tenantId: string): string[] {
   if (!role) {

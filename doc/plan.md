@@ -414,3 +414,16 @@ done alongside what was.
   on `(patternIndex, resourceIndex)`, collapsing it to
   O(patternSegments × resourceSegments); regression test asserts a
   12-non-adjacent-`**` pattern resolves in under 500ms.
+
+  A third pass re-flagged the now-fixed `**` finding against a stale diff
+  (confirmed by direct inspection that the memoization commit was already
+  on the branch) and surfaced two real, lower-severity items, both fixed:
+  `resolveCallerTenantScope`/`assertTenantAccess` redeclared the inline
+  `{ verb, resource }` shape instead of reusing `RequiredPrivilege` (now
+  `TenantAgnosticPrivilege = Omit<RequiredPrivilege, 'tenantId'>`); and
+  `bindRolePrivileges` binds every privilege on a `tenant`-scoped role with
+  no way for one to opt out and stay tenant-agnostic, which is fine given
+  `tenantScope` is a per-role property in the architecture spec but was
+  undocumented as a constraint — now documented, with the escape hatch
+  (split a mixed role into a `tenant`-scoped and a `global`-scoped entry,
+  assigned together) spelled out in the docstring.
