@@ -86,17 +86,17 @@ than leaving the question and its resolution here.
 
 Breaking change to how every privilege is written and matched.
 
-- [ ] Adopt `verb:tenant-id:resource-glob` throughout, with gitignore-style
+- [x] Adopt `verb:tenant-id:resource-glob` throughout, with gitignore-style
       globbing (`*` within a segment, `**` across). Treat
       `verb:resource-glob`, `verb::resource-glob` and `verb:*:resource-glob`
       as equivalent; reject a bare `verb`.
-- [ ] Write the matcher TDD-first, including the traversal boundary cases —
+- [x] Write the matcher TDD-first, including the traversal boundary cases —
       this is where a subtle bug grants access it shouldn't.
-- [ ] Emit scopes as a **space-separated** OAuth `scope` claim, not
+- [x] Emit scopes as a **space-separated** OAuth `scope` claim, not
       comma-joined `permissions` (`pre-token-generation/handler.ts`).
-- [ ] Replace `admin-api/authz.ts`'s role-vs-scope intersection with plain
+- [x] Replace `admin-api/authz.ts`'s role-vs-scope intersection with plain
       scope matching: the token is authoritative and carries no roles.
-- [ ] Update the seeded role catalog, every fixture, and the privilege tables
+- [x] Update the seeded role catalog, every fixture, and the privilege tables
       in `use-cases/README.md` to the new form.
 
 ### 2. Client registry and tenancy resolution — Sonnet / **Opus**
@@ -350,3 +350,30 @@ done alongside what was.
   SonarQube baseline on `main` had one remaining finding
   (`typescript:S7781`, `AuthChrome.tsx:32`, prefer `replaceAll` over
   `replace`); fixed as part of this step so the baseline is now clean.
+
+- **2026-09-09** — Privilege model rewritten to `verb:tenant-id:resource-glob`
+  (step 1). New `shared/privilegeMatch.ts` — `parsePrivilege`,
+  `matchesResourceGlob` (gitignore-style, recursive segment walk, not a single
+  hand-rolled regex, specifically for the `**`-traversal boundary cases),
+  `hasPrivilege`, `resolveGrantedTenant` — is TDD'd first with 37 cases
+  covering the three equivalent tenant-irrelevant spellings, malformed grants,
+  and traversal boundaries (`*` not crossing `/`, `**` crossing zero or more
+  segments, regex metacharacters in a literal resource treated literally).
+  `pre-token-generation/handler.ts` now emits a space-separated `scope` claim
+  instead of comma-joined `permissions`. `admin-api/authz.ts`'s role-vs-scope
+  intersection (`CallerContext.privileges` + `resolveAccessScope`'s
+  `SCOPE_RANK`) is gone; `CallerContext` now carries only `scopes`, and
+  `assertTenantAccess`/`callerHasPrivilege`/`resolveCallerTenantScope` match
+  against the token's scopes alone. Every admin-api handler's
+  `PRIVILEGE_FAMILY` string became a `{ verb, resource }` pair
+  (`admin:users:read` → `{ verb: 'read', resource: 'admin/users' }`,
+  `admin:roles:read` → `{ verb: 'read', resource: 'admin/roles' }`, tenant
+  passed separately as the target tenant-id rather than embedded via an
+  `:own`/`:*` suffix). `listUsers` now takes the tenant to query from the
+  matched grant itself (`resolveGrantedTenant`) rather than a separate
+  `tenantId` claim, so there is exactly one authoritative source instead of
+  two that could disagree. All fixtures across `lambda-src` and `auth-site`,
+  and the privilege tables/comments in `use-cases/README.md` and the three
+  `admin/*.feature` files, updated to the new form. No Terraform-seeded role
+  catalog exists in this repo to update — that data lives in
+  `terraform-modules`, out of this repo's scope.

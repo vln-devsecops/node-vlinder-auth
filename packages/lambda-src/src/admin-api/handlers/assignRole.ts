@@ -4,7 +4,7 @@ import { tenantRoleKey } from '../../shared/roleAssignments'
 import type { RoleActivation } from '../../shared/types'
 import { NotFoundError } from './getUser'
 
-const PRIVILEGE_FAMILY = 'admin:users:write'
+const REQUIRED_PRIVILEGE = { verb: 'write', resource: 'admin/users' }
 
 export interface AssignRoleParams {
   caller: CallerContext
@@ -52,7 +52,7 @@ export async function assignRole(params: AssignRoleParams): Promise<void> {
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
-  assertTenantAccess(caller, PRIVILEGE_FAMILY, assignment.tenantId)
+  assertTenantAccess(caller, REQUIRED_PRIVILEGE, assignment.tenantId)
 
   await ddbDocClient.send(
     new PutCommand({

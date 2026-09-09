@@ -48,7 +48,7 @@ describe('pre-token-generation handler', () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         roleId: 'tenant-admin',
-        privileges: ['users:read:own', 'users:write:own'],
+        privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
         tenantScope: 'tenant',
       },
     })
@@ -61,11 +61,11 @@ describe('pre-token-generation handler', () => {
       result.response.claimsAndScopeOverrideDetails.accessTokenGeneration?.claimsToAddOrOverride
 
     expect(idClaims).toEqual({
-      permissions: 'users:read:own,users:write:own',
+      scope: 'read:acme-corp:users write:acme-corp:users',
       tenantId: 'acme-corp',
     })
     expect(accessClaims).toEqual({
-      permissions: 'users:read:own,users:write:own',
+      scope: 'read:acme-corp:users write:acme-corp:users',
       tenantId: 'acme-corp',
     })
   })
@@ -75,7 +75,7 @@ describe('pre-token-generation handler', () => {
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
     ddbMock.on(GetCommand).resolves({
-      Item: { roleId: 'tenant-admin', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'tenant-admin', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
     })
 
     const result = await handler(buildEvent())
@@ -102,7 +102,7 @@ describe('pre-token-generation handler', () => {
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
     ddbMock.on(GetCommand).resolves({
-      Item: { roleId: 'tenant-admin', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'tenant-admin', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
     })
 
     const event = buildEvent()
@@ -114,7 +114,7 @@ describe('pre-token-generation handler', () => {
         context: {
           tenantId: 'acme-corp',
           roleIds: ['tenant-admin'],
-          privileges: ['users:read:own'],
+          privileges: ['read:acme-corp:users'],
         },
       },
     ])

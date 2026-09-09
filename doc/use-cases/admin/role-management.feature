@@ -4,9 +4,9 @@ Feature: Admin — manage a user's roles
   So that I can adjust what a user is entitled to do
 
   # First-version scope. The concrete role-management actions an admin can take:
-  #   List the role catalog      GET    /roles                         admin:roles:read
-  #   Grant a role to a user     PUT    /users/{userId}/roles/{roleId} admin:users:write
-  #   Revoke a role from a user  DELETE /users/{userId}/roles/{roleId} admin:users:write
+  #   List the role catalog      GET    /roles                         read:admin/roles
+  #   Grant a role to a user     PUT    /users/{userId}/roles/{roleId} write:<tenant-id>:admin/users
+  #   Revoke a role from a user  DELETE /users/{userId}/roles/{roleId} write:<tenant-id>:admin/users
   #
   # A user may hold several roles within their (single, v1) tenant; granting
   # adds a role rather than replacing the set, and revoking removes one role

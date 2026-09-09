@@ -17,7 +17,7 @@ describe('resolvePrivilegesForUser', () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         roleId: 'tenant-admin',
-        privileges: ['users:read:own', 'users:write:own', 'users:read:own'],
+        privileges: ['read:acme-corp:users', 'write:acme-corp:users', 'read:acme-corp:users'],
         tenantScope: 'tenant',
       },
     })
@@ -32,7 +32,7 @@ describe('resolvePrivilegesForUser', () => {
     expect(resolved).toEqual({
       tenantId: 'acme-corp',
       roleIds: ['tenant-admin'],
-      privileges: ['users:read:own', 'users:write:own'],
+      privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
     })
   })
 
@@ -44,12 +44,12 @@ describe('resolvePrivilegesForUser', () => {
       ],
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'reader' } }).resolves({
-      Item: { roleId: 'reader', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'reader', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'billing' } }).resolves({
       Item: {
         roleId: 'billing',
-        privileges: ['users:read:own', 'billing:write:own'],
+        privileges: ['read:acme-corp:users', 'write:acme-corp:billing'],
         tenantScope: 'tenant',
       },
     })
@@ -64,7 +64,7 @@ describe('resolvePrivilegesForUser', () => {
     expect(resolved.tenantId).toBe('acme-corp')
     expect(resolved.roleIds).toEqual(['reader', 'billing'])
     expect([...resolved.privileges].sort()).toEqual(
-      ['billing:write:own', 'users:read:own'].sort(),
+      ['write:acme-corp:billing', 'read:acme-corp:users'].sort(),
     )
   })
 
@@ -76,10 +76,10 @@ describe('resolvePrivilegesForUser', () => {
       ],
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'reader' } }).resolves({
-      Item: { roleId: 'reader', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'reader', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'superadmin' } }).resolves({
-      Item: { roleId: 'superadmin', privileges: ['users:write:*'], tenantScope: 'global' },
+      Item: { roleId: 'superadmin', privileges: ['write:*:users'], tenantScope: 'global' },
     })
 
     const resolved = await resolvePrivilegesForUser({
@@ -91,7 +91,7 @@ describe('resolvePrivilegesForUser', () => {
 
     // superadmin is held but elevated -> its privileges must NOT be in the login token.
     expect(resolved.roleIds).toEqual(['reader'])
-    expect(resolved.privileges).toEqual(['users:read:own'])
+    expect(resolved.privileges).toEqual(['read:acme-corp:users'])
   })
 
   it('returns no tenant/privileges when the user has no role assignment', async () => {

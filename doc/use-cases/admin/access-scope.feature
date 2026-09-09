@@ -6,19 +6,19 @@ Feature: Admin — every admin action is confined to the caller's tenant scope
   # First-version scope. Every admin handler independently re-derives the
   # caller's privileges from their token claims and re-checks access — it does
   # not trust the API's authorizer alone (defense in depth, assertTenantAccess).
-  # Scope is encoded in the privilege string itself:
-  #   <family>:own  — acts only within the caller's own tenant
-  #   <family>:*     — acts across all tenants (super-admin)
-  #   <family>       — ungated reference data, no tenant scoping
+  # Privileges are verb:tenant-id:resource-glob:
+  #   write:<tenant-id>:admin/users — acts only within that one tenant
+  #   write:*:admin/users            — acts across all tenants (super-admin)
+  #   read:admin/roles               — ungated reference data, no tenant scoping
   #
-  # The complete v1 admin action set, and the privilege family each is gated on:
-  #   | Action                    | Route                                 | Privilege family  |
-  #   | List users in scope       | GET    /users                         | admin:users:read  |
-  #   | View a single user        | GET    /users/{userId}                | admin:users:read  |
-  #   | Enable or disable a user  | PATCH  /users/{userId}/enabled        | admin:users:write |
-  #   | Grant a role to a user    | PUT    /users/{userId}/roles/{roleId} | admin:users:write |
-  #   | Revoke a role from a user | DELETE /users/{userId}/roles/{roleId} | admin:users:write |
-  #   | List the role catalog     | GET    /roles                         | admin:roles:read  |
+  # The complete v1 admin action set, and the privilege each is gated on:
+  #   | Action                    | Route                                 | Privilege                     |
+  #   | List users in scope       | GET    /users                         | read:<tenant-id>:admin/users  |
+  #   | View a single user        | GET    /users/{userId}                | read:<tenant-id>:admin/users  |
+  #   | Enable or disable a user  | PATCH  /users/{userId}/enabled        | write:<tenant-id>:admin/users |
+  #   | Grant a role to a user    | PUT    /users/{userId}/roles/{roleId} | write:<tenant-id>:admin/users |
+  #   | Revoke a role from a user | DELETE /users/{userId}/roles/{roleId} | write:<tenant-id>:admin/users |
+  #   | List the role catalog     | GET    /roles                         | read:admin/roles              |
   # Single-tenant is the v1 default (one implicit tenant); the same mechanism
   # governs multi-tenant deployments. See README.md and doc/architecture.md.
 
@@ -68,7 +68,7 @@ Feature: Admin — every admin action is confined to the caller's tenant scope
       | revoke a role from a user |
 
   Scenario: Listing the role catalog is ungated by tenant
-    Given I am an admin holding the "admin:roles:read" privilege
+    Given I am an admin holding the "read:admin/roles" privilege
     When I list the role catalog
     Then the roles are returned regardless of tenant scope
 
@@ -78,10 +78,10 @@ Feature: Admin — every admin action is confined to the caller's tenant scope
     Then the action is forbidden
 
     Examples:
-      | action                    | privilege         |
-      | view the user list        | admin:users:read  |
-      | view a single user        | admin:users:read  |
-      | enable or disable a user  | admin:users:write |
-      | grant a role to a user    | admin:users:write |
-      | revoke a role from a user | admin:users:write |
-      | list the role catalog     | admin:roles:read  |
+      | action                    | privilege                     |
+      | view the user list        | read:<tenant-id>:admin/users  |
+      | view a single user        | read:<tenant-id>:admin/users  |
+      | enable or disable a user  | write:<tenant-id>:admin/users |
+      | grant a role to a user    | write:<tenant-id>:admin/users |
+      | revoke a role from a user | write:<tenant-id>:admin/users |
+      | list the role catalog     | read:admin/roles              |

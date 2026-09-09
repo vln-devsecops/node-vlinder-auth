@@ -33,7 +33,7 @@ describe('setUserEnabled', () => {
     cognitoMock.on(AdminDisableUserCommand).resolves({})
 
     await setUserEnabled({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       enabled: false,
       ...commonParams,
@@ -53,7 +53,7 @@ describe('setUserEnabled', () => {
     cognitoMock.on(AdminEnableUserCommand).resolves({})
 
     await setUserEnabled({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       enabled: true,
       ...commonParams,
@@ -70,7 +70,7 @@ describe('setUserEnabled', () => {
 
     await expect(
       setUserEnabled({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+        caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
         targetUserId: 'user-2',
         enabled: false,
         ...commonParams,
@@ -87,7 +87,7 @@ describe('setUserEnabled', () => {
 
     await expect(
       setUserEnabled({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:own'] },
+        caller: { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
         targetUserId: 'user-1',
         enabled: false,
         ...commonParams,
@@ -100,7 +100,7 @@ describe('setUserEnabled', () => {
 
     await expect(
       setUserEnabled({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:*'] },
+        caller: { tenantId: 'acme-corp', scopes: ['write:*:admin/users'] },
         targetUserId: 'ghost-user',
         enabled: false,
         ...commonParams,

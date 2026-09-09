@@ -24,7 +24,7 @@ describe('revokeRole', () => {
     ddbMock.on(DeleteCommand).resolves({})
 
     await revokeRole({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       roleId: 'billing',
       ...commonParams,
@@ -47,7 +47,7 @@ describe('revokeRole', () => {
     ddbMock.on(DeleteCommand).resolves({})
 
     await revokeRole({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       roleId: 'reader',
       ...commonParams,
@@ -67,7 +67,7 @@ describe('revokeRole', () => {
 
     await expect(
       revokeRole({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+        caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
         targetUserId: 'user-2',
         roleId: 'member',
         ...commonParams,
@@ -82,7 +82,7 @@ describe('revokeRole', () => {
 
     await expect(
       revokeRole({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:*'] },
+        caller: { tenantId: 'acme-corp', scopes: ['write:*:admin/users'] },
         targetUserId: 'ghost-user',
         roleId: 'member',
         ...commonParams,

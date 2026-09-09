@@ -24,7 +24,7 @@ describe('assignRole', () => {
     ddbMock.on(PutCommand).resolves({})
 
     await assignRole({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       roleId: 'tenant-admin',
       ...commonParams,
@@ -53,7 +53,7 @@ describe('assignRole', () => {
     ddbMock.on(PutCommand).resolves({})
 
     await assignRole({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+      caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       roleId: 'tenant-admin',
       activation: 'default',
@@ -73,7 +73,7 @@ describe('assignRole', () => {
 
     await expect(
       assignRole({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:own'] },
+        caller: { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
         targetUserId: 'user-2',
         roleId: 'tenant-admin',
         ...commonParams,
@@ -88,7 +88,7 @@ describe('assignRole', () => {
 
     await expect(
       assignRole({
-        caller: { tenantId: 'acme-corp', privileges: ['admin:users:write:*'] },
+        caller: { tenantId: 'acme-corp', scopes: ['write:*:admin/users'] },
         targetUserId: 'ghost-user',
         roleId: 'tenant-admin',
         ...commonParams,

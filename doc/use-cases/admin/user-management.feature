@@ -8,13 +8,13 @@ Feature: Admin — manage users
   # session redirects to sign-in. It calls the bundled admin API, which enforces
   # the caller's privileges per request. The concrete user-management actions an
   # admin can take in v1:
-  #   List users in scope       GET   /users                    admin:users:read
-  #   View a single user        GET   /users/{userId}           admin:users:read
-  #   Enable or disable a user  PATCH /users/{userId}/enabled   admin:users:write
+  #   List users in scope       GET   /users                    read:<tenant-id>:admin/users
+  #   View a single user        GET   /users/{userId}           read:<tenant-id>:admin/users
+  #   Enable or disable a user  PATCH /users/{userId}/enabled   write:<tenant-id>:admin/users
   # (Role grant/revoke is in role-management.feature; scope enforcement across
   # every action is in access-scope.feature.) Listing is tenant-scoped: a tenant
-  # admin (a "...:own" privilege) sees only their own tenant's users; a
-  # super-admin (a "...:*" privilege) sees every tenant. See doc/architecture.md.
+  # admin (a grant naming one tenant-id) sees only that tenant's users; a
+  # super-admin (a "verb:*:admin/users" grant) sees every tenant. See doc/architecture.md.
 
   Background:
     Given I am signed in as an admin

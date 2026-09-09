@@ -3,7 +3,7 @@ import { assertTenantAccess, type CallerContext } from '../authz'
 import { tenantRoleKey } from '../../shared/roleAssignments'
 import { NotFoundError } from './getUser'
 
-const PRIVILEGE_FAMILY = 'admin:users:write'
+const REQUIRED_PRIVILEGE = { verb: 'write', resource: 'admin/users' }
 
 export interface RevokeRoleParams {
   caller: CallerContext
@@ -37,7 +37,7 @@ export async function revokeRole(params: RevokeRoleParams): Promise<void> {
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
-  assertTenantAccess(caller, PRIVILEGE_FAMILY, assignment.tenantId)
+  assertTenantAccess(caller, REQUIRED_PRIVILEGE, assignment.tenantId)
 
   await ddbDocClient.send(
     new DeleteCommand({

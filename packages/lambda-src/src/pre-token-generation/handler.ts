@@ -28,7 +28,7 @@ export async function handler(
 
   if (resolved.tenantId !== undefined) {
     const claims = {
-      permissions: resolved.privileges.join(','),
+      scope: resolved.privileges.join(' '),
       tenantId: resolved.tenantId,
     }
 

@@ -7,7 +7,7 @@ import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb
 import { assertTenantAccess, type CallerContext } from '../authz'
 import { NotFoundError } from './getUser'
 
-const PRIVILEGE_FAMILY = 'admin:users:write'
+const REQUIRED_PRIVILEGE = { verb: 'write', resource: 'admin/users' }
 
 export interface SetUserEnabledParams {
   caller: CallerContext
@@ -45,7 +45,7 @@ export async function setUserEnabled(params: SetUserEnabledParams): Promise<void
     throw new NotFoundError(`No user found with id ${targetUserId}`)
   }
 
-  assertTenantAccess(caller, PRIVILEGE_FAMILY, assignment.tenantId)
+  assertTenantAccess(caller, REQUIRED_PRIVILEGE, assignment.tenantId)
 
   const command = enabled
     ? new AdminEnableUserCommand({ UserPoolId: userPoolId, Username: targetUserId })

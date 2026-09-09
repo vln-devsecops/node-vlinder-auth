@@ -7,7 +7,7 @@ import { assertTenantAccess, type CallerContext } from '../authz'
 import type { AssignedRole, RoleActivation } from '../../shared/types'
 import type { AdminUserSummary } from './listUsers'
 
-const PRIVILEGE_FAMILY = 'admin:users:read'
+const REQUIRED_PRIVILEGE = { verb: 'read', resource: 'admin/users' }
 
 export class NotFoundError extends Error {
   constructor(message: string) {
@@ -52,7 +52,7 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
     .filter((row) => row.tenantId === tenantId)
     .map((row) => ({ roleId: row.roleId, activation: row.activation ?? 'default' }))
 
-  assertTenantAccess(caller, PRIVILEGE_FAMILY, tenantId)
+  assertTenantAccess(caller, REQUIRED_PRIVILEGE, tenantId)
 
   const cognitoUser = await cognitoClient.send(
     new AdminGetUserCommand({ UserPoolId: userPoolId, Username: targetUserId }),

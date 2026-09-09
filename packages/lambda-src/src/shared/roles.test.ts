@@ -62,7 +62,7 @@ describe('getRoleDefinition', () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         roleId: 'tenant-admin',
-        privileges: ['users:read:own', 'users:write:own'],
+        privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
         tenantScope: 'tenant',
       },
     })
@@ -75,7 +75,7 @@ describe('getRoleDefinition', () => {
 
     expect(role).toEqual({
       roleId: 'tenant-admin',
-      privileges: ['users:read:own', 'users:write:own'],
+      privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
       tenantScope: 'tenant',
     })
   })
