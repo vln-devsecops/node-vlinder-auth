@@ -75,11 +75,11 @@ than leaving the question and its resolution here.
 
 ### 0. Close out the prior plan — Sonnet / Sonnet
 
-- [ ] Full-suite verification: `npm run test --workspaces --if-present`,
+- [x] Full-suite verification: `npm run test --workspaces --if-present`,
       `cd e2e && npm test`, lint, `tsc --noEmit` across workspaces.
-- [ ] Eyeball `design_handoff_auth_chrome/`'s mockups against the deployed
+- [x] Eyeball `design_handoff_auth_chrome/`'s mockups against the deployed
       `AuthChrome`, then delete that directory (it exists only for that check).
-- [ ] Confirm the SonarQube baseline is clean — zero new *and* zero remaining
+- [x] Confirm the SonarQube baseline is clean — zero new *and* zero remaining
       baseline findings.
 
 ### 1. Privilege model — Sonnet / **Opus (security-critical)**
@@ -338,3 +338,15 @@ done alongside what was.
   match its host until self-issuance, which strict OIDC libraries reject; the
   deviation is temporary, self-resolving, and documented where integrators
   will meet it. No code changed — step 4a is the resulting gap.
+
+- **2026-09-09** — Closed out the prior plan (step 0). Full-suite
+  verification passed (unit tests, e2e dry-run, lint, `tsc --noEmit` across
+  all workspaces). Eyeballed `design_handoff_auth_chrome/`'s mockups against
+  `auth-site`'s dev server: the chrome layer (split panel, card, colors,
+  spacing, copy) matches the handoff spec exactly for sign-in, sign-up and
+  forgot-password. The verify screen uses a single text input rather than the
+  mockup's 6-digit box treatment — pre-existing `auth-ui` primitive, out of
+  the chrome-only scope of that handoff, not a regression. Directory deleted.
+  SonarQube baseline on `main` had one remaining finding
+  (`typescript:S7781`, `AuthChrome.tsx:32`, prefer `replaceAll` over
+  `replace`); fixed as part of this step so the baseline is now clean.

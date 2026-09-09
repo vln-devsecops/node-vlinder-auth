@@ -29,7 +29,7 @@ export function themeFromProfile(profile: AuthProfile): Partial<VlinderAuthTheme
 
 export function AuthChrome(props: Readonly<AuthChromeProps>) {
   const profile = resolveProfile(props.profile ?? 'default')
-  const scope = `auth-chrome-${useId().replace(/:/g, '')}`
+  const scope = `auth-chrome-${useId().replaceAll(':', '')}`
 
   return (
     <div
