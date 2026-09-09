@@ -10,23 +10,32 @@ import {
 describe('extractCallerContext', () => {
   it('splits the space-delimited scope claim into a scope list', () => {
     const caller = extractCallerContext({
-      tenantId: 'acme-corp',
       scope: 'read:acme-corp:admin/users write:acme-corp:admin/users',
     })
 
     expect(caller).toEqual({
-      tenantId: 'acme-corp',
       scopes: ['read:acme-corp:admin/users', 'write:acme-corp:admin/users'],
     })
   })
 
   it('handles a missing scope claim as an empty scope list', () => {
-    const caller = extractCallerContext({ tenantId: 'acme-corp' })
+    const caller = extractCallerContext({})
     expect(caller.scopes).toEqual([])
   })
 
   it('handles a present-but-empty scope claim as an empty scope list', () => {
     expect(extractCallerContext({ scope: '' }).scopes).toEqual([])
+  })
+
+  it('ignores any other claims, including a bare tenantId', () => {
+    // The token's tenant is carried in each scope itself
+    // (verb:tenant-id:resource-glob), not read from a separate claim -- there
+    // is exactly one source of truth here, nothing to reconcile it against.
+    const caller = extractCallerContext({
+      tenantId: 'acme-corp',
+      scope: 'read:acme-corp:admin/users',
+    })
+    expect(caller).toEqual({ scopes: ['read:acme-corp:admin/users'] })
   })
 })
 
@@ -34,7 +43,7 @@ describe('callerHasPrivilege', () => {
   it('is true when a scope matches verb, tenant and resource', () => {
     expect(
       callerHasPrivilege(
-        { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+        { scopes: ['read:acme-corp:admin/users'] },
         { verb: 'read', resource: 'admin/users', tenantId: 'acme-corp' },
       ),
     ).toBe(true)
@@ -43,7 +52,7 @@ describe('callerHasPrivilege', () => {
   it('is false when the caller holds no matching scope', () => {
     expect(
       callerHasPrivilege(
-        { tenantId: 'acme-corp', scopes: [] },
+        { scopes: [] },
         { verb: 'read', resource: 'admin/users', tenantId: 'acme-corp' },
       ),
     ).toBe(false)
@@ -53,7 +62,7 @@ describe('callerHasPrivilege', () => {
 describe('resolveCallerTenantScope', () => {
   it('returns "global" when the caller holds a tenant-wildcard scope', () => {
     const granted = resolveCallerTenantScope(
-      { tenantId: 'acme-corp', scopes: ['read:*:admin/users'] },
+      { scopes: ['read:*:admin/users'] },
       { verb: 'read', resource: 'admin/users' },
     )
     expect(granted).toEqual({ scope: 'global' })
@@ -61,7 +70,7 @@ describe('resolveCallerTenantScope', () => {
 
   it('returns the concrete tenant when the caller holds only a tenant-scoped scope', () => {
     const granted = resolveCallerTenantScope(
-      { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+      { scopes: ['read:acme-corp:admin/users'] },
       { verb: 'read', resource: 'admin/users' },
     )
     expect(granted).toEqual({ scope: 'own', tenantIds: ['acme-corp'] })
@@ -69,7 +78,7 @@ describe('resolveCallerTenantScope', () => {
 
   it('returns "none" when the caller holds neither variant', () => {
     const granted = resolveCallerTenantScope(
-      { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/roles'] },
+      { scopes: ['read:acme-corp:admin/roles'] },
       { verb: 'read', resource: 'admin/users' },
     )
     expect(granted).toEqual({ scope: 'none' })
@@ -77,10 +86,7 @@ describe('resolveCallerTenantScope', () => {
 
   it('prefers "global" when the caller holds both variants', () => {
     const granted = resolveCallerTenantScope(
-      {
-        tenantId: 'acme-corp',
-        scopes: ['read:acme-corp:admin/users', 'read:*:admin/users'],
-      },
+      { scopes: ['read:acme-corp:admin/users', 'read:*:admin/users'] },
       { verb: 'read', resource: 'admin/users' },
     )
     expect(granted).toEqual({ scope: 'global' })
@@ -91,7 +97,7 @@ describe('assertTenantAccess', () => {
   it('allows a tenant-wildcard scope regardless of the target tenant', () => {
     expect(() =>
       assertTenantAccess(
-        { tenantId: 'acme-corp', scopes: ['read:*:admin/users'] },
+        { scopes: ['read:*:admin/users'] },
         { verb: 'read', resource: 'admin/users' },
         'some-other-tenant',
       ),
@@ -101,7 +107,7 @@ describe('assertTenantAccess', () => {
   it('allows a tenant-scoped scope when the target tenant matches', () => {
     expect(() =>
       assertTenantAccess(
-        { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+        { scopes: ['read:acme-corp:admin/users'] },
         { verb: 'read', resource: 'admin/users' },
         'acme-corp',
       ),
@@ -111,7 +117,7 @@ describe('assertTenantAccess', () => {
   it('rejects a tenant-scoped scope targeting a different tenant', () => {
     expect(() =>
       assertTenantAccess(
-        { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+        { scopes: ['read:acme-corp:admin/users'] },
         { verb: 'read', resource: 'admin/users' },
         'some-other-tenant',
       ),
@@ -120,18 +126,14 @@ describe('assertTenantAccess', () => {
 
   it('rejects a caller with no matching scope at all', () => {
     expect(() =>
-      assertTenantAccess(
-        { tenantId: 'acme-corp', scopes: [] },
-        { verb: 'read', resource: 'admin/users' },
-        'acme-corp',
-      ),
+      assertTenantAccess({ scopes: [] }, { verb: 'read', resource: 'admin/users' }, 'acme-corp'),
     ).toThrow(ForbiddenError)
   })
 
   it('rejects a caller holding only the wrong verb', () => {
     expect(() =>
       assertTenantAccess(
-        { tenantId: 'acme-corp', scopes: ['write:acme-corp:admin/users'] },
+        { scopes: ['write:acme-corp:admin/users'] },
         { verb: 'read', resource: 'admin/users' },
         'acme-corp',
       ),

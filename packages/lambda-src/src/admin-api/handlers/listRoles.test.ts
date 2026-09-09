@@ -20,7 +20,7 @@ describe('listRoles', () => {
     })
 
     const result = await listRoles({
-      caller: { tenantId: 'acme-corp', scopes: ['read:admin/roles'] },
+      caller: { scopes: ['read:admin/roles'] },
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
       rolesTableName: 'roles-table',
     })
@@ -34,7 +34,7 @@ describe('listRoles', () => {
   it('rejects a caller without the read:admin/roles privilege', async () => {
     await expect(
       listRoles({
-        caller: { tenantId: 'acme-corp', scopes: [] },
+        caller: { scopes: [] },
         ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
         rolesTableName: 'roles-table',
       }),

@@ -61,8 +61,9 @@ export interface ListUsersResult {
  * tenant-scoped grants (a caller can hold more than one), or every tenant
  * for a tenant-wildcard (super-admin) grant -- the same mechanism as the
  * token's privilege check, just applied to a listing instead of a single
- * target. The tenant(s) to query come from the grants themselves, not a
- * separate `tenantId` claim, so there is exactly one authoritative source.
+ * target. This route takes no tenant parameter of its own, so there is
+ * nothing for the grants to be checked against or overridden -- the grants
+ * are simply the whole answer to "which tenants."
  */
 export async function listUsers(params: ListUsersParams): Promise<ListUsersResult> {
   const { caller, ddbDocClient, cognitoClient, roleAssignmentsTableName, userPoolId } = params

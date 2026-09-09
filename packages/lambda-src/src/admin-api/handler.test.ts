@@ -67,7 +67,7 @@ describe('admin-api handler', () => {
 
     expect(listUsersMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        caller: { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+        caller: { scopes: ['read:acme-corp:admin/users'] },
       }),
     )
     expect(result.statusCode).toBe(200)

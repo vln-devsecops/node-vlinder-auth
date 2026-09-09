@@ -33,7 +33,7 @@ function jsonResponse(statusCode: number, body?: unknown): APIGatewayProxyStruct
  * routeKey. Each route delegates to a handler in ./handlers, which performs
  * its own tenant-scope check independent of the Lambda authorizer that
  * already validated the token (see node-http-api-authorizer) -- that
- * authorizer verifies the JWT itself and forwards tenantId/scope
+ * authorizer verifies the JWT itself and forwards scope
  * into its context, the same claims a native JWT authorizer would have
  * exposed.
  */

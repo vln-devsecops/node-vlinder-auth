@@ -427,3 +427,21 @@ done alongside what was.
   undocumented as a constraint — now documented, with the escape hatch
   (split a mixed role into a `tenant`-scoped and a `global`-scoped entry,
   assigned together) spelled out in the docstring.
+
+  User review (not the Opus pass, a direct read of the diff) caught a real
+  design smell the Opus passes missed: `listUsers` had a test explicitly
+  demonstrating that a mismatched `caller.tenantId` claim was silently
+  discarded in favor of whatever tenant the scope named, rather than either
+  being consulted or erroring on disagreement. Investigating why turned up
+  that `CallerContext.tenantId` was already dead everywhere else --
+  `getUser`/`assignRole`/`revokeRole`/`setUserEnabled` derive their target
+  tenant from the resource being acted on, never from this claim, and
+  `listUsers`'s route takes no tenant parameter of its own to check it
+  against. It only ever looked like a second, competing input. Removed
+  `tenantId` from `CallerContext` and `extractCallerContext` entirely (the
+  `scope` claim, which already carries the tenant per privilege, is now the
+  only field read into the caller's authorization context), so there is
+  exactly one source of truth and nothing left to silently prefer over
+  another. The `tenantId` claim itself is untouched at the token level --
+  other consumers (e.g. the SPA, for display) may still read it; only the
+  admin API's own authorization stopped treating it as an input.

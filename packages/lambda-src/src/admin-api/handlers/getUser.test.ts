@@ -35,7 +35,7 @@ describe('getUser', () => {
     })
 
     const user = await getUser({
-      caller: { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+      caller: { scopes: ['read:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       ...commonParams,
     })
@@ -64,7 +64,7 @@ describe('getUser', () => {
     })
 
     const user = await getUser({
-      caller: { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+      caller: { scopes: ['read:acme-corp:admin/users'] },
       targetUserId: 'user-1',
       ...commonParams,
     })
@@ -82,7 +82,7 @@ describe('getUser', () => {
 
     await expect(
       getUser({
-        caller: { tenantId: 'acme-corp', scopes: ['read:acme-corp:admin/users'] },
+        caller: { scopes: ['read:acme-corp:admin/users'] },
         targetUserId: 'user-2',
         ...commonParams,
       }),
@@ -100,7 +100,7 @@ describe('getUser', () => {
     })
 
     const user = await getUser({
-      caller: { tenantId: 'acme-corp', scopes: ['read:*:admin/users'] },
+      caller: { scopes: ['read:*:admin/users'] },
       targetUserId: 'user-2',
       ...commonParams,
     })
@@ -113,7 +113,7 @@ describe('getUser', () => {
 
     await expect(
       getUser({
-        caller: { tenantId: 'acme-corp', scopes: ['read:*:admin/users'] },
+        caller: { scopes: ['read:*:admin/users'] },
         targetUserId: 'ghost-user',
         ...commonParams,
       }),
