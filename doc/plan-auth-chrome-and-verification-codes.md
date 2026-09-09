@@ -1,6 +1,13 @@
 # Plan: app-owned verification codes + AuthChrome handoff
 
-**Current step:** 11 (Step 7 is ops-owned, not a code session — skipped for now, see its own note)
+> **Superseded.** This plan is complete apart from its final verification
+> pass, which is carried as step 0 of the living plan,
+> [`plan.md`](./plan.md). Step 7 was ops-owned and skipped by design (see its
+> own note). Kept for its progress log, which records how the verification-code
+> and AuthChrome work landed; it is not a live queue. New work goes in
+> [`plan.md`](./plan.md).
+
+**Current step:** 11 — final verification only (see [`plan.md`](./plan.md) step 0)
 
 ## Context
 
