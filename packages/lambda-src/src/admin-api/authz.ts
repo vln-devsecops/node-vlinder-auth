@@ -15,26 +15,33 @@ export class ForbiddenError extends Error {
 
 export interface CallerContext {
   /**
+   * The token's `tenants` claim, space-delimited: every tenant this session
+   * is currently authenticated against (a user can be logged in on more
+   * than one). This is what caps a tenant-wildcard scope from reaching
+   * every tenant that exists down to only the ones the caller actually
+   * authenticated to -- a wildcard privilege is not a bypass of that,
+   * because a tenant the caller never authenticated against may sit behind
+   * a different identity provider entirely.
+   */
+  tenants: string[]
+  /**
    * The token's `scope` claim, space-delimited per OAuth convention and
-   * split here. The token is authoritative -- there is no separate role,
-   * "permissions", or tenant-id input to reconcile this against. Every
-   * tenant a caller may act on is named by their scopes themselves
-   * (`verb:tenant-id:resource-glob`); a bare `tenantId` claim is not
-   * consulted here, so there is exactly one source of truth to read and
-   * nothing to silently prefer over something else.
+   * split here. The token is authoritative -- there is no separate role or
+   * "permissions" input to reconcile this against.
    */
   scopes: string[]
 }
 
 /**
- * Reconstructs the caller's granted scopes from the JWT claims API Gateway's
- * JWT authorizer forwards through. This is the defense-in-depth check: the
- * authorizer already verified the token's signature/issuer, but each handler
- * independently re-derives and re-checks access rather than trusting the
- * authorizer's mere presence.
+ * Reconstructs the caller's authenticated tenants and granted scopes from
+ * the JWT claims API Gateway's JWT authorizer forwards through. This is the
+ * defense-in-depth check: the authorizer already verified the token's
+ * signature/issuer, but each handler independently re-derives and re-checks
+ * access rather than trusting the authorizer's mere presence.
  */
 export function extractCallerContext(claims: Record<string, string | undefined>): CallerContext {
   return {
+    tenants: claims.tenants ? claims.tenants.split(' ').filter(Boolean) : [],
     scopes: claims.scope ? claims.scope.split(' ').filter(Boolean) : [],
   }
 }
@@ -43,7 +50,7 @@ export type { RequiredPrivilege, TenantAgnosticPrivilege }
 
 /** Whether the caller holds a privilege matching `required`, tenant included if given. */
 export function callerHasPrivilege(caller: CallerContext, required: RequiredPrivilege): boolean {
-  return hasPrivilege(caller.scopes, required)
+  return hasPrivilege(caller.scopes, required, caller.tenants)
 }
 
 /** Which tenant(s), if any, the caller's scopes grant `required` access to. */
@@ -51,7 +58,7 @@ export function resolveCallerTenantScope(
   caller: CallerContext,
   required: TenantAgnosticPrivilege,
 ): GrantedTenantScope {
-  return resolveGrantedTenant(caller.scopes, required)
+  return resolveGrantedTenant(caller.scopes, required, caller.tenants)
 }
 
 /** Throws ForbiddenError unless the caller holds `required` for targetTenantId. */
@@ -62,7 +69,7 @@ export function assertTenantAccess(
 ): void {
   if (!callerHasPrivilege(caller, { ...required, tenantId: targetTenantId })) {
     throw new ForbiddenError(
-      `Missing privilege ${required.verb}:${targetTenantId}:${required.resource} (or a tenant-wildcard grant)`,
+      `Missing privilege ${required.verb}:${targetTenantId}:${required.resource} for an authenticated tenant`,
     )
   }
 }

@@ -122,8 +122,11 @@ export interface RequiredPrivilege {
   /**
    * Omit when the check is not tied to any one tenant (e.g. reference data
    * every tenant shares) -- any grant satisfies it regardless of the
-   * grant's own tenant segment. Provide it to require the grant be either
-   * tenant-wildcard or scoped to this exact tenant.
+   * grant's own tenant segment or the caller's authenticated tenants.
+   * Provide it to require both that the grant covers this tenant (exactly,
+   * or via a tenant-wildcard) *and* that the caller is currently
+   * authenticated against it -- see `authenticatedTenants` on
+   * {@link hasPrivilege} and {@link resolveGrantedTenant}.
    */
   tenantId?: string
 }
@@ -131,44 +134,68 @@ export interface RequiredPrivilege {
 /** A privilege check with no tenant opinion of its own -- see {@link RequiredPrivilege.tenantId}. */
 export type TenantAgnosticPrivilege = Omit<RequiredPrivilege, 'tenantId'>
 
-function grantSatisfies(grant: ParsedPrivilege, required: RequiredPrivilege): boolean {
+function grantSatisfies(
+  grant: ParsedPrivilege,
+  required: RequiredPrivilege,
+  authenticatedTenants: string[],
+): boolean {
   if (grant.verb !== required.verb) {
     return false
   }
-  if (required.tenantId !== undefined && grant.tenantId !== undefined) {
-    if (grant.tenantId !== required.tenantId) {
+  if (required.tenantId !== undefined) {
+    // A caller can be authenticated against several tenants at once (see the
+    // `tenants` claim). A grant -- wildcard or not -- can never reach a
+    // tenant outside that set: a tenant-wildcard privilege means "every
+    // tenant I'm authenticated against", not "every tenant that exists",
+    // since the identity provider backing a tenant the caller never
+    // authenticated to may not even agree the caller is who they say they
+    // are. This also nets a stale or mismatched concrete grant (naming a
+    // tenant the caller no longer holds a session for).
+    if (!authenticatedTenants.includes(required.tenantId)) {
+      return false
+    }
+    if (grant.tenantId !== undefined && grant.tenantId !== required.tenantId) {
       return false
     }
   }
   return matchesResourceGlob(grant.resource, required.resource)
 }
 
-/** Whether any grant in the list satisfies the required privilege. */
-export function hasPrivilege(grants: string[], required: RequiredPrivilege): boolean {
+/**
+ * Whether any grant in the list satisfies the required privilege.
+ * `authenticatedTenants` is the caller's own `tenants` claim -- the set of
+ * tenants their current session is actually authenticated against; see
+ * {@link RequiredPrivilege.tenantId}.
+ */
+export function hasPrivilege(
+  grants: string[],
+  required: RequiredPrivilege,
+  authenticatedTenants: string[],
+): boolean {
   return grants.some((raw) => {
     const parsed = parsePrivilege(raw)
-    return parsed !== undefined && grantSatisfies(parsed, required)
+    return parsed !== undefined && grantSatisfies(parsed, required, authenticatedTenants)
   })
 }
 
-export type GrantedTenantScope =
-  | { scope: 'global' }
-  | { scope: 'own'; tenantIds: string[] }
-  | { scope: 'none' }
+export type GrantedTenantScope = { scope: 'granted'; tenantIds: string[] } | { scope: 'none' }
 
 /**
  * For listing-style checks that need to know *which* tenant(s) a caller may
- * see, not just whether they may see one in particular. Prefers `global`
- * (a tenant-wildcard grant) even when tenant-scoped grants also match, since
- * global strictly subsumes them. A caller can hold several tenant-scoped
- * grants at once (e.g. distinct roles in distinct tenants), so `own`
- * collects every matching tenant rather than keeping only the last one seen.
+ * see, not just whether they may see one in particular. A tenant-wildcard
+ * grant resolves to every tenant in `authenticatedTenants` (never more --
+ * see {@link RequiredPrivilege.tenantId}); a tenant-scoped grant contributes
+ * its own tenant only if it's also in `authenticatedTenants`. A caller can
+ * hold several tenant-scoped grants at once (e.g. distinct roles in
+ * distinct tenants), so the result collects every matching tenant rather
+ * than keeping only the last one seen.
  */
 export function resolveGrantedTenant(
   grants: string[],
   required: TenantAgnosticPrivilege,
+  authenticatedTenants: string[],
 ): GrantedTenantScope {
-  const ownTenantIds = new Set<string>()
+  const tenantIds = new Set<string>()
 
   for (const raw of grants) {
     const parsed = parsePrivilege(raw)
@@ -179,10 +206,13 @@ export function resolveGrantedTenant(
       continue
     }
     if (parsed.tenantId === undefined) {
-      return { scope: 'global' }
+      for (const tenantId of authenticatedTenants) {
+        tenantIds.add(tenantId)
+      }
+    } else if (authenticatedTenants.includes(parsed.tenantId)) {
+      tenantIds.add(parsed.tenantId)
     }
-    ownTenantIds.add(parsed.tenantId)
   }
 
-  return ownTenantIds.size === 0 ? { scope: 'none' } : { scope: 'own', tenantIds: [...ownTenantIds] }
+  return tenantIds.size === 0 ? { scope: 'none' } : { scope: 'granted', tenantIds: [...tenantIds] }
 }

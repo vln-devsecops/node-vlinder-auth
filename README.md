@@ -43,11 +43,16 @@ tenant, no tenant table, no tenant switcher.
 Privileges are `verb:tenant-id:resource-glob` (gitignore-style globbing:
 `*` within a path segment, `**` across segments). Where the tenant is
 irrelevant, `verb:resource-glob`, `verb::resource-glob` and
-`verb:*:resource-glob` are equivalent spellings. The JWT carries the
-resolved privileges as a standard, space-separated OAuth `scope` claim
-(not a comma-joined `permissions` claim) plus a `tenantId` claim for
-display purposes only — the scope claim alone is authoritative for
-authorization. The bundled `admin-api` (`packages/lambda-src/src/admin-api`)
+`verb:*:resource-glob` are equivalent spellings. A user can be logged in on
+more than one tenant at once, so the JWT carries a space-separated `tenants`
+claim naming every tenant the session is actually authenticated against,
+alongside the resolved privileges as a standard, space-separated OAuth
+`scope` claim (not a comma-joined `permissions` claim, and not a singular
+`tenantId`). A tenant-wildcard (`verb:*:resource-glob`) privilege reaches
+only the tenants in `tenants`, never every tenant that exists -- a tenant
+the caller never authenticated against may sit behind a different identity
+provider entirely, so a wildcard grant is not a bypass of that. The bundled
+`admin-api` (`packages/lambda-src/src/admin-api`)
 commits to a concrete convention for its own privileges, documented here
 since it's the one piece of this repo that actually enforces it (downstream
 consumers of `vlinder_auth` are free to invent their own privilege

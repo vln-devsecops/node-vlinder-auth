@@ -43,7 +43,10 @@ more of these, and `access-scope.feature` asserts the scope check on each:
 | List the role catalog | `GET /roles` | `read:admin/roles` (tenant-irrelevant) |
 
 A tenant-wildcard grant (`verb:*:resource-glob`, or its equivalent spellings)
-reaches every tenant; a grant naming one tenant-id reaches only that tenant.
+reaches every tenant the caller is authenticated against — a user can be
+logged in on more than one tenant at once (the token's `tenants` claim),
+and a wildcard never reaches beyond that set; a grant naming one tenant-id
+reaches only that tenant.
 
 A grant carries an activation (`elevated` by default — held for a future sudo
 step-up — or `default` for a login-active role); see `role-management.feature`.

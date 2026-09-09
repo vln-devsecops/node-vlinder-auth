@@ -11,7 +11,8 @@ export interface ResolvePrivilegesForUserParams {
 }
 
 export interface ResolvedPrivileges {
-  tenantId: string | undefined
+  /** Every tenant the user holds a role assignment in -- the `tenants` claim. */
+  tenants: string[]
   /** The active (default) roles whose privileges are unioned into the token. */
   roleIds: string[]
   privileges: string[]
@@ -48,13 +49,15 @@ function bindRolePrivileges(role: RoleDefinition | undefined, tenantId: string):
 }
 
 /**
- * Resolves a user's **login** privileges: the deduped union of the privileges
- * of their `default` (active-at-login) roles. Roles the user holds as
- * `elevated` are ignored here -- they contribute nothing until a sudo step-up
- * (future) resolves privileges including chosen elevated roles. This is the
- * boundary between "role" (an app-defined name) and "privilege" (what actually
- * lands in the token) -- callers only ever see privileges and the tenantId,
- * never the role names themselves.
+ * Resolves a user's **login** privileges across every tenant they hold an
+ * assignment in (a user can be logged in on more than one tenant at once):
+ * the deduped union, per tenant, of the privileges of their `default`
+ * (active-at-login) roles, bound to that tenant. Roles the user holds as
+ * `elevated` are ignored here -- they contribute nothing until a sudo
+ * step-up (future) resolves privileges including chosen elevated roles.
+ * This is the boundary between "role" (an app-defined name) and "privilege"
+ * (what actually lands in the token) -- callers only ever see privileges
+ * and the tenant list, never the role names themselves.
  */
 export async function resolvePrivilegesForUser(
   params: ResolvePrivilegesForUserParams,
@@ -68,28 +71,32 @@ export async function resolvePrivilegesForUser(
   })
 
   if (!assignments) {
-    return { tenantId: undefined, roleIds: [], privileges: [] }
+    return { tenants: [], roleIds: [], privileges: [] }
   }
 
-  const activeRoleIds = assignments.roles
-    .filter((role) => role.activation === 'default')
-    .map((role) => role.roleId)
+  const roleIds: string[] = []
+  const privileges: string[] = []
 
-  const roleDefinitions = await Promise.all(
-    activeRoleIds.map((roleId) =>
-      getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
-    ),
-  )
+  for (const { tenantId, roles } of assignments.tenants) {
+    const activeRoleIds = roles
+      .filter((role) => role.activation === 'default')
+      .map((role) => role.roleId)
 
-  const privileges = [
-    ...new Set(
-      roleDefinitions.flatMap((role) => bindRolePrivileges(role, assignments.tenantId)),
-    ),
-  ]
+    const roleDefinitions = await Promise.all(
+      activeRoleIds.map((roleId) =>
+        getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
+      ),
+    )
+
+    roleIds.push(...activeRoleIds)
+    for (const role of roleDefinitions) {
+      privileges.push(...bindRolePrivileges(role, tenantId))
+    }
+  }
 
   return {
-    tenantId: assignments.tenantId,
-    roleIds: activeRoleIds,
-    privileges,
+    tenants: assignments.tenants.map((tenant) => tenant.tenantId),
+    roleIds,
+    privileges: [...new Set(privileges)],
   }
 }

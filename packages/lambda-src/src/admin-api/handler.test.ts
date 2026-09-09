@@ -40,7 +40,7 @@ function buildEvent(
     headers: {},
     requestContext: {
       authorizer: {
-        lambda: { tenantId: 'acme-corp', scope: 'read:acme-corp:admin/users' },
+        lambda: { tenants: 'acme-corp', scope: 'read:acme-corp:admin/users' },
       },
     },
     pathParameters: {},
@@ -67,7 +67,7 @@ describe('admin-api handler', () => {
 
     expect(listUsersMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        caller: { scopes: ['read:acme-corp:admin/users'] },
+        caller: { tenants: ['acme-corp'], scopes: ['read:acme-corp:admin/users'] },
       }),
     )
     expect(result.statusCode).toBe(200)

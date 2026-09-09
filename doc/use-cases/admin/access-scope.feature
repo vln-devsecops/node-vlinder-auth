@@ -8,7 +8,10 @@ Feature: Admin — every admin action is confined to the caller's tenant scope
   # not trust the API's authorizer alone (defense in depth, assertTenantAccess).
   # Privileges are verb:tenant-id:resource-glob:
   #   write:<tenant-id>:admin/users — acts only within that one tenant
-  #   write:*:admin/users            — acts across all tenants (super-admin)
+  #   write:*:admin/users            — acts across every tenant the caller is
+  #                                    currently authenticated against
+  #                                    (super-admin) -- never a tenant they
+  #                                    haven't, even holding this grant
   #   read:admin/roles               — ungated reference data, no tenant scoping
   #
   # The complete v1 admin action set, and the privilege each is gated on:
@@ -53,9 +56,9 @@ Feature: Admin — every admin action is confined to the caller's tenant scope
   # only the caller's own tenant. That filtering is covered in
   # user-management.feature; here we assert the per-user actions above.
 
-  Scenario Outline: A super-admin may <action> in any tenant
-    Given I am a super-admin whose privileges cover every tenant
-    When I <action> for a user in any tenant
+  Scenario Outline: A super-admin may <action> in any tenant they are authenticated against
+    Given I am a super-admin logged in on several tenants
+    When I <action> for a user in one of those tenants
     Then the action is allowed
 
     Examples:
@@ -66,6 +69,23 @@ Feature: Admin — every admin action is confined to the caller's tenant scope
       | disable a user            |
       | grant a role to a user    |
       | revoke a role from a user |
+
+  Scenario Outline: A super-admin may not <action> in a tenant they never authenticated against
+    Given I am a super-admin logged in on several tenants
+    When I <action> for a user in a tenant I am not logged in on
+    Then the action is forbidden
+
+    Examples:
+      | action                    |
+      | view a single user        |
+      | enable a user             |
+      | disable a user            |
+      | grant a role to a user    |
+      | revoke a role from a user |
+
+  # A super-admin's listing is not forbidden for the tenant they're not
+  # authenticated against — it simply excludes it, the same as a
+  # tenant-scoped admin's listing excludes tenants outside their own grant.
 
   Scenario: Listing the role catalog is ungated by tenant
     Given I am an admin holding the "read:admin/roles" privilege

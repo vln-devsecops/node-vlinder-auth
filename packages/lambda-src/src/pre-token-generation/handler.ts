@@ -7,9 +7,11 @@ import { loadPreTokenGenerationConfig } from './config'
 /**
  * Cognito pre-token-generation trigger (V2 event shape, which V3_0 also
  * delivers for standard user-authentication trigger sources). Resolves the
- * caller's role assignment and injects the expanded *privilege* list plus
- * tenantId as claims -- the role name itself is never added to the token, so
- * downstream services only ever reason about privileges.
+ * caller's role assignments -- possibly across more than one tenant, for a
+ * user logged in on several at once -- and injects the expanded *privilege*
+ * list plus the authenticated tenant list as claims. The role name itself is
+ * never added to the token, so downstream services only ever reason about
+ * privileges.
  */
 export async function handler(
   event: PreTokenGenerationV2TriggerEvent,
@@ -26,10 +28,10 @@ export async function handler(
     ddbDocClient,
   })
 
-  if (resolved.tenantId !== undefined) {
+  if (resolved.tenants.length > 0) {
     const claims = {
       scope: resolved.privileges.join(' '),
-      tenantId: resolved.tenantId,
+      tenants: resolved.tenants.join(' '),
     }
 
     // Cognito delivers claimsAndScopeOverrideDetails as null in the real V2
@@ -51,7 +53,7 @@ export async function handler(
   }
 
   await invokeOptionalHook(config.hookModulePath, event, {
-    tenantId: resolved.tenantId,
+    tenants: resolved.tenants,
     roleIds: resolved.roleIds,
     privileges: resolved.privileges,
   })

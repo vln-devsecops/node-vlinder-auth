@@ -340,6 +340,24 @@ segments. When the tenant is irrelevant, `verb:resource-glob`,
 bare `verb` with no resource is invalid — a privilege always says what it acts
 on.
 
+### A tenant-wildcard privilege is capped to the token's `tenants` claim, not every tenant that exists
+
+A user can hold role assignments in more than one tenant and be logged in on
+all of them at once — the token's `tenants` claim (space-separated) names
+exactly which. A naive reading of `verb:*:resource-glob` would let a caller
+holding it reach *every* tenant in the system, including ones they never
+authenticated against. That is a real gap, not a theoretical one: a tenant's
+domain owner can pin their users to a corporate IdP with its own settings
+(see the previous section), so authenticating to one tenant proves nothing
+about a caller's standing in another. Every matcher function that resolves a
+tenant-wildcard grant intersects it with `tenants` — a wildcard reaches
+exactly the tenants the caller is currently authenticated against, never
+more. This replaced an earlier, simpler design where a wildcard grant meant
+literally every tenant and `listUsers`' global-scope branch issued an
+unfiltered table scan; that branch is gone, along with the "own" vs "global"
+distinction it required — every case now resolves to a concrete set of
+tenant IDs.
+
 ## Delivery
 
 ### Lambda source is a published package, not vendored source

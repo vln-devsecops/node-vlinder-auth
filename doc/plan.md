@@ -475,3 +475,28 @@ done alongside what was.
   `verb:*:resource-glob` form, matching the binding behavior
   `bindRolePrivileges` implements on this side; `rbac.tftest.hcl` updated to
   match and reverified (`terraform test`, 57/57 passing).
+
+  Follow-on design correction, requested directly: a user can be logged in
+  on more than one tenant at once, and a tenant-wildcard scope must not
+  reach beyond the tenants the caller is actually authenticated against
+  (a tenant the caller never authenticated to may sit behind a different
+  identity provider entirely). This closes a real gap in the design above,
+  not an implementation bug in it. Replaced the singular `tenantId` claim
+  with a space-separated `tenants` claim; `hasPrivilege`/`resolveGrantedTenant`
+  now take the caller's authenticated-tenants set as a required third
+  argument and cap every tenant-wildcard match to it -- a concrete grant
+  naming a tenant outside that set is rejected too, as a defensive backstop.
+  `GrantedTenantScope`'s `'global'` variant is gone: a wildcard now always
+  resolves to a concrete, capped tenant-ID list, so `listUsers`' unfiltered
+  `ScanCommand` branch (previously reachable by any super-admin-style grant,
+  regardless of which tenants they'd actually authenticated to) is deleted
+  entirely -- there is no code path left that lists across the whole table.
+  Lifted the "v1 assumes a user is active in exactly one tenant" restriction
+  in `resolveUserRoleAssignments`/`resolvePrivilegesForUser`: role
+  assignments are now grouped and resolved per tenant rather than anchored
+  to the first tenant seen, so a user's actual holdings across tenants are
+  reflected instead of silently discarded. `CallerContext.tenants` is
+  distinct from the `tenantId` field removed earlier in this step -- that
+  one was genuinely dead (nothing read it); this one is load-bearing, since
+  it's what every wildcard match is capped against. Reflected in
+  `terraform-modules`' `vlinder_auth` README (same PR #133).

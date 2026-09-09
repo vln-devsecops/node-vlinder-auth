@@ -14,7 +14,10 @@ Feature: Admin — manage users
   # (Role grant/revoke is in role-management.feature; scope enforcement across
   # every action is in access-scope.feature.) Listing is tenant-scoped: a tenant
   # admin (a grant naming one tenant-id) sees only that tenant's users; a
-  # super-admin (a "verb:*:admin/users" grant) sees every tenant. See doc/architecture.md.
+  # super-admin (a "verb:*:admin/users" grant) sees every tenant the caller
+  # is authenticated against -- a user can be logged in on more than one
+  # tenant at once, and the wildcard never reaches beyond that set. See
+  # doc/architecture.md.
 
   Background:
     Given I am signed in as an admin

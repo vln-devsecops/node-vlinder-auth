@@ -30,14 +30,20 @@ export interface RoleAssignment {
   activation: RoleActivation
 }
 
+/** A user's roles within one tenant. */
+export interface TenantRoles {
+  tenantId: string
+  roles: AssignedRole[]
+}
+
 /**
- * A user's full set of roles within their tenant. A user may hold several
- * roles per tenant; their effective (login) privileges are the union across
- * the `default` ones (v1 keeps a user in a single tenant -- see
- * resolveUserRoleAssignments).
+ * A user's full set of roles, grouped by tenant. A user may hold several
+ * roles per tenant and may hold assignments in more than one tenant at
+ * once (a user logged in on more than one tenant simultaneously); their
+ * effective (login) privileges are the union, per tenant, of the `default`
+ * ones -- see resolveUserRoleAssignments and resolvePrivilegesForUser.
  */
 export interface UserRoleAssignments {
   userId: string
-  tenantId: string
-  roles: AssignedRole[]
+  tenants: TenantRoles[]
 }
