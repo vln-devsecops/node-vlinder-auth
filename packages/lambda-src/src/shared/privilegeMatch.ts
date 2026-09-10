@@ -1,4 +1,24 @@
 /**
+ * Not built on `globby`/`fast-glob`/`minimatch`: those match glob patterns
+ * against the filesystem (or, for `minimatch`, against path-like strings)
+ * and are optimized and audited for that job, not for authorization
+ * decisions on arbitrary resource identifiers. Concretely: `globby`/
+ * `fast-glob` are async and walk a real directory tree -- there is no
+ * directory tree here, `resource-glob` segments are DB-modeled resource
+ * names, not paths on disk. `minimatch` fits the string-matching shape
+ * better, but its brace/extglob/negation surface (`{a,b}`, `!(...)`, `?()`)
+ * is far beyond what `doc/plan.md`'s spec calls for -- `*` within a segment,
+ * `**` across segments -- and every one of those extra features is
+ * additional attack surface to reason about in a security-critical matcher
+ * with no corresponding benefit here. Implementing exactly the two
+ * operators the spec needs, with an explicit recursive segment walk and
+ * memoized backtracking (see `matchesResourceGlob` below), keeps the whole
+ * matching surface auditable in one file instead of trusting a
+ * general-purpose library's much larger feature set to not have a
+ * privilege-escalating edge case in a corner nothing here exercises.
+ */
+
+/**
  * A privilege written as `verb:tenant-id:resource-glob`. `tenantId` is
  * `undefined` when the grant is not tied to any one tenant -- the
  * `verb:resource-glob`, `verb::resource-glob` and `verb:*:resource-glob`

@@ -240,6 +240,12 @@ enforced no-`POST`-routes invariant.
       in a token (avatar, preferences, display name). It is not redundant with
       the ID token — the privilege half overlaps, the rest does not, and it
       reflects grants changed server-side after the token was minted.
+- [ ] Design profile inheritance for `/whoami` (a tenant-level profile
+      overriding the global/default one) — raised in PR #103 review as an
+      open question, not yet discussed. Once designed, add the e2e/BDD
+      scenario also raised there: log a user into one tenant, then a second,
+      and assert both the per-tenant and overall token claims plus
+      `/whoami`'s tenant-scoped profile for each.
 - [ ] `POST /sudo`: re-check the grant against `user_role_assignments`, mint an
       elevated access token and a rotated refresh token carrying the grant's
       expiry. Activation never creates a grant.

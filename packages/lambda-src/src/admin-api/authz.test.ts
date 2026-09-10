@@ -31,6 +31,40 @@ describe('extractCallerContext', () => {
   it('handles a present-but-empty tenants or scope claim as empty', () => {
     expect(extractCallerContext({ tenants: '', scope: '' })).toEqual({ tenants: [], scopes: [] })
   })
+
+  it('splits a scope claim with several entries, preserving order', () => {
+    const scope = [
+      'read:acme-corp:admin/users',
+      'write:acme-corp:admin/users',
+      'read:acme-corp:admin/roles',
+      'write:globex:admin/users',
+      'read:*:admin/roles',
+    ].join(' ')
+
+    expect(extractCallerContext({ scope }).scopes).toEqual([
+      'read:acme-corp:admin/users',
+      'write:acme-corp:admin/users',
+      'read:acme-corp:admin/roles',
+      'write:globex:admin/users',
+      'read:*:admin/roles',
+    ])
+  })
+
+  it('extracts tenants and scopes independently, without cross-checking one against the other', () => {
+    // extractCallerContext is a pure claims-to-struct mapping; it does not
+    // validate that every scope's own tenant segment appears in the tenants
+    // claim. That check belongs downstream, in the matcher (see
+    // `authenticatedTenants` in privilegeMatch.ts) -- covered below by
+    // `callerHasPrivilege`/`resolveCallerTenantScope`/`assertTenantAccess`
+    // all rejecting a scope for a tenant the caller isn't authenticated
+    // against.
+    const caller = extractCallerContext({
+      tenants: 'globex',
+      scope: 'read:acme-corp:admin/users',
+    })
+
+    expect(caller).toEqual({ tenants: ['globex'], scopes: ['read:acme-corp:admin/users'] })
+  })
 })
 
 describe('callerHasPrivilege', () => {

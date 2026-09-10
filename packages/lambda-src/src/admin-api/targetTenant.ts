@@ -27,6 +27,17 @@ export interface TargetAssignmentRow {
  * silently picking one tenant and acting on it -- or, worse, silently
  * dropping the other tenants' role data -- this throws loudly so the
  * ambiguity surfaces instead of producing a plausible-looking wrong answer.
+ *
+ * Nothing in the table's key schema (partition key `userId`, sort key
+ * `<tenantId>#<roleId>`) or its `tenantId-index` GSI stops a user from
+ * holding rows in more than one tenant -- the schema is intentionally the
+ * same one the *caller* side's multi-tenant login relies on. No DynamoDB
+ * uniqueness constraint or write path enforces "one tenant per target user";
+ * it's an application-level convention today, upheld only because
+ * `assignRole` always re-derives the tenant via this same function before
+ * writing. This function is the actual enforcement point -- it re-checks the
+ * assumption against every row on every read rather than trusting the
+ * convention held.
  */
 export async function loadTargetUsersSoleTenant(
   ddbDocClient: DynamoDBDocumentClient,
