@@ -34,7 +34,7 @@ function buildEvent(
 ): APIGatewayProxyEventV2WithLambdaAuthorizer<Record<string, string>> {
   return {
     version: '2.0',
-    routeKey: 'GET /users',
+    routeKey: 'GET /api/v1/users',
     rawPath: '/users',
     rawQueryString: '',
     headers: {},
@@ -63,7 +63,7 @@ describe('admin-api handler', () => {
   it('routes GET /users to listUsers and returns 200 with the result as JSON', async () => {
     listUsersMock.mockResolvedValue({ users: [{ userId: 'user-1' }] })
 
-    const result = await handler(buildEvent({ routeKey: 'GET /users' }))
+    const result = await handler(buildEvent({ routeKey: 'GET /api/v1/users' }))
 
     expect(listUsersMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -78,7 +78,7 @@ describe('admin-api handler', () => {
     getUserMock.mockResolvedValue({ userId: 'user-1' })
 
     await handler(
-      buildEvent({ routeKey: 'GET /users/{userId}', pathParameters: { userId: 'user-1' } }),
+      buildEvent({ routeKey: 'GET /api/v1/users/{userId}', pathParameters: { userId: 'user-1' } }),
     )
 
     expect(getUserMock).toHaveBeenCalledWith(
@@ -91,7 +91,7 @@ describe('admin-api handler', () => {
 
     const result = await handler(
       buildEvent({
-        routeKey: 'PATCH /users/{userId}/enabled',
+        routeKey: 'PATCH /api/v1/users/{userId}/enabled',
         pathParameters: { userId: 'user-1' },
         body: JSON.stringify({ enabled: false }),
       }),
@@ -106,7 +106,7 @@ describe('admin-api handler', () => {
   it('routes GET /roles to listRoles', async () => {
     listRolesMock.mockResolvedValue({ roles: [] })
 
-    const result = await handler(buildEvent({ routeKey: 'GET /roles' }))
+    const result = await handler(buildEvent({ routeKey: 'GET /api/v1/roles' }))
 
     expect(listRolesMock).toHaveBeenCalled()
     expect(result.statusCode).toBe(200)
@@ -117,7 +117,7 @@ describe('admin-api handler', () => {
 
     const result = await handler(
       buildEvent({
-        routeKey: 'PUT /users/{userId}/roles/{roleId}',
+        routeKey: 'PUT /api/v1/users/{userId}/roles/{roleId}',
         pathParameters: { userId: 'user-1', roleId: 'tenant-admin' },
       }),
     )
@@ -137,7 +137,7 @@ describe('admin-api handler', () => {
 
     await handler(
       buildEvent({
-        routeKey: 'PUT /users/{userId}/roles/{roleId}',
+        routeKey: 'PUT /api/v1/users/{userId}/roles/{roleId}',
         pathParameters: { userId: 'user-1', roleId: 'tenant-admin' },
         body: JSON.stringify({ activation: 'default' }),
       }),
@@ -153,7 +153,7 @@ describe('admin-api handler', () => {
 
     const result = await handler(
       buildEvent({
-        routeKey: 'DELETE /users/{userId}/roles/{roleId}',
+        routeKey: 'DELETE /api/v1/users/{userId}/roles/{roleId}',
         pathParameters: { userId: 'user-1', roleId: 'billing' },
       }),
     )
@@ -167,7 +167,7 @@ describe('admin-api handler', () => {
   it('maps a ForbiddenError from a handler to a 403 response', async () => {
     listUsersMock.mockRejectedValue(new ForbiddenError('nope'))
 
-    const result = await handler(buildEvent({ routeKey: 'GET /users' }))
+    const result = await handler(buildEvent({ routeKey: 'GET /api/v1/users' }))
 
     expect(result.statusCode).toBe(403)
   })

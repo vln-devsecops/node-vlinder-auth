@@ -110,7 +110,7 @@ async function routeRequest(
   } = deps
 
   switch (event.routeKey) {
-    case 'POST /auth/identify': {
+    case 'POST /api/v1/auth/identify': {
       const requestedClientId = bodyString(body.client_id) || undefined
       const result = await identify({
         identifier: bodyString(body.identifier),
@@ -130,7 +130,7 @@ async function routeRequest(
       ])
     }
 
-    case 'POST /auth/password': {
+    case 'POST /api/v1/auth/password': {
       const cookies = parseCookies(event.cookies)
       const result = await password({
         identifySession: cookies[IDENTIFY_SESSION_COOKIE],
@@ -162,7 +162,7 @@ async function routeRequest(
       ])
     }
 
-    case 'POST /auth/signup': {
+    case 'POST /api/v1/auth/signup': {
       const email = bodyString(body.email)
       await signUp({
         email,
@@ -186,7 +186,7 @@ async function routeRequest(
       return json(200, {})
     }
 
-    case 'POST /auth/confirm': {
+    case 'POST /api/v1/auth/confirm': {
       await confirmSignUp({
         email: bodyString(body.email),
         code: bodyString(body.code),
@@ -197,7 +197,7 @@ async function routeRequest(
       return json(200, {})
     }
 
-    case 'POST /auth/resend': {
+    case 'POST /api/v1/auth/resend': {
       await resendConfirmation({
         email: bodyString(body.email),
         ddbDocClient,
@@ -209,7 +209,7 @@ async function routeRequest(
       return json(200, {})
     }
 
-    case 'POST /auth/forgot': {
+    case 'POST /api/v1/auth/forgot': {
       await forgotPassword({
         email: bodyString(body.email),
         cognitoClient,
@@ -223,7 +223,7 @@ async function routeRequest(
       return json(200, {})
     }
 
-    case 'POST /auth/reset': {
+    case 'POST /api/v1/auth/reset': {
       await confirmForgotPassword({
         email: bodyString(body.email),
         code: bodyString(body.code),
@@ -246,8 +246,9 @@ async function routeRequest(
  * Public auth API for the vendor-neutral login flow (no JWT authorizer -- this
  * is how a token is obtained in the first place). Routes on routeKey. The SPA
  * talks to these same-origin; the in-flight identify session travels as an
- * HttpOnly cookie. Transitional: /auth/password returns the auth tokens in the
- * body for the SPA's current sessionStorage flow (see handlers/password.ts).
+ * HttpOnly cookie. Transitional: /api/v1/auth/password returns the auth
+ * tokens in the body for the SPA's current sessionStorage flow (see
+ * handlers/password.ts).
  */
 export async function handler(
   event: APIGatewayProxyEventV2,
