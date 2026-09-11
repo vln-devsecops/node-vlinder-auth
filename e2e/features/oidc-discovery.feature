@@ -11,3 +11,7 @@ Feature: OIDC discovery document
     When I visit the auth site
     And I sign in with valid credentials
     Then the discovery document's issuer matches my session token's issuer
+
+  Scenario: The discovery document is served as application/json
+    When I fetch the discovery document
+    Then it is served with an application/json content type
