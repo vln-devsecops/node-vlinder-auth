@@ -1,4 +1,4 @@
-import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import { GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import type { TenancyMode } from './types'
 
 export interface ResolveTenantConfig {
@@ -11,6 +11,11 @@ export interface ResolveTenantForNewUserParams {
   email: string
   config: ResolveTenantConfig
   ddbDocClient: DynamoDBDocumentClient
+}
+
+/** The part of an email after `@`, lowercased; `undefined` for anything without one. */
+function extractEmailDomain(email: string): string | undefined {
+  return email.split('@')[1]?.toLowerCase()
 }
 
 /**
@@ -29,7 +34,7 @@ export async function resolveTenantForNewUser(
     return config.defaultTenantId
   }
 
-  const domain = email.split('@')[1]?.toLowerCase()
+  const domain = extractEmailDomain(email)
   if (!domain) {
     return config.defaultTenantId
   }
@@ -46,4 +51,94 @@ export async function resolveTenantForNewUser(
 
   const tenantId = result.Items?.[0]?.tenantId as string | undefined
   return tenantId ?? config.defaultTenantId
+}
+
+export class UnknownClientError extends Error {}
+
+export interface ResolveTenantIdForClientConfig {
+  /**
+   * The auth application's own tenant -- resolved when a request carries no
+   * `client_id` at all (e.g. the admin panel, or any other surface reached
+   * directly at `auth.<zone>`), never as a fallback for an unrecognized one.
+   */
+  authAppTenantId: string
+  tenantsTableName: string
+}
+
+export interface ResolveTenantIdForClientParams {
+  clientId: string | undefined
+  config: ResolveTenantIdForClientConfig
+  ddbDocClient: DynamoDBDocumentClient
+}
+
+/**
+ * Resolves the tenant a request belongs to from the calling application's
+ * `client_id` -- the first of the two lookups tenancy relies on (the second,
+ * {@link resolveIdentityProviderForDomain}, happens within the tenant this
+ * resolves). An absent `client_id` resolves to the auth application's own
+ * tenant; a `client_id` that doesn't match any registered client throws
+ * rather than silently falling back to some tenant it was never granted --
+ * an unrecognized client is a request to reject, not a guess to make.
+ */
+export async function resolveTenantIdForClient(
+  params: ResolveTenantIdForClientParams,
+): Promise<string> {
+  const { clientId, config, ddbDocClient } = params
+
+  if (!clientId) {
+    return config.authAppTenantId
+  }
+
+  const result = await ddbDocClient.send(
+    new QueryCommand({
+      TableName: config.tenantsTableName,
+      IndexName: 'clientId-index',
+      KeyConditionExpression: 'clientId = :c',
+      ExpressionAttributeValues: { ':c': clientId },
+      Limit: 1,
+    }),
+  )
+
+  const tenantId = result.Items?.[0]?.tenantId as string | undefined
+  if (!tenantId) {
+    throw new UnknownClientError(`No tenant is registered for client_id ${clientId}`)
+  }
+  return tenantId
+}
+
+export interface ResolveIdentityProviderForDomainParams {
+  /** The tenant already resolved via {@link resolveTenantIdForClient} -- the lookup below is scoped to it. */
+  tenantId: string
+  email: string
+  tenantsTableName: string
+  ddbDocClient: DynamoDBDocumentClient
+}
+
+/**
+ * Resolves the identity provider, if any, a tenant's domain owner has pinned
+ * the given email's domain to -- the second of the two tenancy lookups (see
+ * {@link resolveTenantIdForClient}). `undefined` means no provider is pinned
+ * for this domain *in this tenant*, either because none was ever registered
+ * or because the domain is registered to a different tenant: either way, the
+ * caller falls back to the tenant's defaults (local signup, any offered
+ * social providers), never to a provider pinned somewhere else.
+ */
+export async function resolveIdentityProviderForDomain(
+  params: ResolveIdentityProviderForDomainParams,
+): Promise<string | undefined> {
+  const { tenantId, email, tenantsTableName, ddbDocClient } = params
+
+  const domain = extractEmailDomain(email)
+  if (!domain) {
+    return undefined
+  }
+
+  const result = await ddbDocClient.send(
+    new GetCommand({
+      TableName: tenantsTableName,
+      Key: { tenantId, sk: `DOMAIN#${domain}` },
+    }),
+  )
+
+  return result.Item?.identityProviderId as string | undefined
 }

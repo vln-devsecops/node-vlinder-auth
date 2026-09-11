@@ -6,6 +6,7 @@ import { getCognitoClient } from '../shared/cognito-client'
 import { getDdbDocClient } from '../shared/ddb-client'
 import { getSecret } from '../shared/secrets'
 import { getSesClient } from '../shared/ses-client'
+import { UnknownClientError } from '../shared/tenants'
 import { identify, IDENTIFY_SESSION_TTL_SECONDS, InvalidIdentifierError } from './handlers/identify'
 import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './handlers/password'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
@@ -52,6 +53,8 @@ interface RouteDeps {
   sesClient: SESv2Client
   clientId: string
   userPoolId: string
+  tenantsTableName: string
+  authAppTenantId: string
   verificationCodesTableName: string
   verificationCodeTtlSeconds: number
   verificationCodeMaxAttempts: number
@@ -75,6 +78,9 @@ function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | unde
   if (error instanceof InvalidVerificationCodeError) {
     return json(400, { error: error.message })
   }
+  if (error instanceof UnknownClientError) {
+    return json(400, { error: error.message })
+  }
   // Ordinary self-service failures (bad code, weak password, taken username)
   // surface as a 400 with the provider's message.
   if (error instanceof CognitoClientError) {
@@ -95,6 +101,8 @@ async function routeRequest(
     sesClient,
     clientId,
     userPoolId,
+    tenantsTableName,
+    authAppTenantId,
     verificationCodesTableName,
     verificationCodeTtlSeconds,
     verificationCodeMaxAttempts,
@@ -103,8 +111,19 @@ async function routeRequest(
 
   switch (event.routeKey) {
     case 'POST /auth/identify': {
-      const result = await identify({ identifier: bodyString(body.identifier), signingKey })
-      return json(200, { method: result.method }, [
+      const requestedClientId = bodyString(body.client_id) || undefined
+      const result = await identify({
+        identifier: bodyString(body.identifier),
+        clientId: requestedClientId,
+        signingKey,
+        config: { tenantsTableName, authAppTenantId },
+        ddbDocClient,
+      })
+      const responseBody =
+        result.method === 'redirect'
+          ? { method: result.method, location: result.location }
+          : { method: result.method }
+      return json(200, responseBody, [
         serializeSessionCookie(IDENTIFY_SESSION_COOKIE, result.identifySession, {
           maxAgeSeconds: IDENTIFY_SESSION_TTL_SECONDS,
         }),
@@ -240,6 +259,8 @@ export async function handler(
     sesClient: getSesClient(),
     clientId: requireEnv('AUTH_CLIENT_ID'),
     userPoolId: requireEnv('USER_POOL_ID'),
+    tenantsTableName: requireEnv('TENANTS_TABLE_NAME'),
+    authAppTenantId: requireEnv('AUTH_APP_TENANT_ID'),
     verificationCodesTableName: requireEnv('VERIFICATION_CODES_TABLE_NAME'),
     verificationCodeTtlSeconds: Number(requireEnv('VERIFICATION_CODE_TTL_SECONDS')),
     verificationCodeMaxAttempts: Number(requireEnv('VERIFICATION_CODE_MAX_ATTEMPTS')),

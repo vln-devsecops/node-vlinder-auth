@@ -101,17 +101,19 @@ Breaking change to how every privilege is written and matched.
 
 ### 2. Client registry and tenancy resolution — Sonnet / **Opus**
 
-- [ ] `client_id → tenant_id` registry; `(email_domain, tenant_id) →
+- [x] `client_id → tenant_id` registry; `(email_domain, tenant_id) →
       identity provider` mapping. Extend the tenants table rather than
       inventing a parallel store.
-- [ ] Resolve the tenant from `client_id` at `/authorize`; resolve the
+- [x] Resolve the tenant from `client_id` at `/authorize`; resolve the
       provider from email domain at `/identify`, falling back to the tenant's
-      defaults when no provider is pinned.
-- [ ] Give the auth application its own tenant, so `auth.<zone>` reached
+      defaults when no provider is pinned. (`/authorize` itself is step 6,
+      unbuilt -- the resolution function is ready for it; wired live at
+      `/identify`, which already exists.)
+- [x] Give the auth application its own tenant, so `auth.<zone>` reached
       without a `client_id` (admin panel, later user profile) still resolves.
-- [ ] Confirm single-tenant mode still assigns a tenant; it differs only by
+- [x] Confirm single-tenant mode still assigns a tenant; it differs only by
       exposing no tenant CRUD.
-- [ ] Keep registration behind a narrow interface so no-code onboarding can be
+- [x] Keep registration behind a narrow interface so no-code onboarding can be
       layered on later.
 
 ### 3. Stop stripping `/api/v1` — Sonnet / Sonnet
@@ -536,3 +538,69 @@ done alongside what was.
   definitions in a sequential loop instead of one `Promise.all` across
   every tenant, adding avoidable per-tenant latency inside the
   timeout-sensitive Cognito pre-token-generation trigger.
+
+- **2026-09-11** — Step 2 (client registry and tenancy resolution). New
+  `shared/tenants.ts` functions, TDD'd: `resolveTenantIdForClient` (the
+  `client_id → tenant_id` lookup, via a new `clientId-index` GSI on the
+  `tenants` table; an absent `client_id` resolves to the auth application's
+  own reserved tenant, `"auth"`, rather than falling back to some default --
+  `auth.<zone>` reached with no `client_id`, e.g. the admin panel, belongs
+  there) and `resolveIdentityProviderForDomain` (the `(email_domain,
+  tenant_id) → identity provider` lookup, a direct `GetItem` on
+  `(tenantId, "DOMAIN#<domain>")` since the tenant is already known by the
+  time this runs -- no second GSI needed). Both throw/return `undefined`
+  rather than guess: an unrecognized `client_id` throws `UnknownClientError`
+  instead of silently mapping to a tenant it was never granted; a domain
+  with no pin in the resolved tenant returns `undefined`, meaning the
+  tenant's defaults apply, not that some other tenant's pin should.
+
+  Wired live into `/auth/identify`, the one endpoint of the two the plan
+  names that already exists (`/authorize` is step 6, unbuilt): it now
+  accepts an optional `client_id`, resolves the tenant, and resolves the
+  identifier's email domain against that tenant's pins, returning
+  `method: 'redirect'` with a same-origin `location` (`/federation?
+  provider=<id>&action=start`) when one is pinned -- matching the
+  `method: 'redirect'`/`location` contract `ui-auth`'s `SignInFlow` and
+  `auth-site` already expected (an earlier draft of this invented a
+  competing `'federated'`/`provider` shape before noticing the frontend
+  already had one). Actually driving a federated sign-in (the
+  `/federation` endpoint itself, and the redirect/callback handshake)
+  stays step 11's job -- this only determines that a redirect is due and
+  where to, per the existing "federation resolution lands in a later
+  increment" comment in `identify.ts`, which described the redirect, not
+  this determination. Since no tenant has any domain pinned by default,
+  existing sign-in behavior (`method: 'password'`) is unchanged wherever
+  nothing new is
+  configured.
+
+  `terraform-modules`' `vlinder_auth` module (same feature branch, PR #133 --
+  confirmed with rlc it stays unmerged until this whole line of work is
+  done, so this landed as a further commit on it rather than a new PR):
+  the `tenants` table gained a range key (`sk`) so it can hold more than one
+  record per tenant -- `"PROFILE"` (the existing tenant record, unchanged
+  shape), `"CLIENT#<clientId>"` (the new registry entry, indexed by the new
+  `clientId-index` GSI), `"DOMAIN#<domain>"` (the new identity-provider pin,
+  looked up directly, no GSI). `clients` enties gained `tenant_id` (required,
+  and validated against `tenants`' keys, in `"multi"` mode); `tenants`
+  entries gained `identity_providers` (domain → provider id map). The auth
+  site's own Cognito client is now registered under the reserved `"auth"`
+  tenant, which is merged into `effective_tenants` unconditionally -- even
+  `"single"` mode now seeds two tenant records (`"default"` and `"auth"`),
+  matching `architecture.md`'s "even single-tenant deployments have at least
+  two tenants" line, which the code hadn't caught up with before this step.
+  `auth_api`'s IAM role and environment gained exactly the two permissions
+  this needs (`GetItem` on the table, `Query` on `clientId-index`) and two
+  env vars (`TENANTS_TABLE_NAME`, `AUTH_APP_TENANT_ID`).
+
+  Not done, deliberately: no admin-facing registration API for clients or
+  domain pins -- registration today is Terraform-variable-driven, same
+  convention as the existing `tenants`/`roles` seeding, which is itself the
+  "narrow interface" the plan asked to keep clear for later no-code
+  onboarding (swapping the seeding mechanism for a live API later doesn't
+  change what reads the table). No actual federation handshake -- that's
+  step 11. No threading of the resolved `tenantId`/`provider` past the
+  identify-session into `/auth/password` or `/auth/signup` yet -- today's
+  single-tenant-per-signup flow (`post-confirmation`'s domain-based
+  `resolveTenantForNewUser`) is untouched and still what assigns a new
+  user's tenant; connecting the two is part of the RP handoff work in step
+  6, which is also what's meant to extend the identify-session JWS further.

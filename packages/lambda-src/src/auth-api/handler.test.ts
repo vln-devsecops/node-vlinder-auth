@@ -14,6 +14,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  QueryCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2 } from 'aws-lambda'
@@ -40,6 +41,8 @@ beforeEach(() => {
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
+  process.env.TENANTS_TABLE_NAME = 'tenants-table'
+  process.env.AUTH_APP_TENANT_ID = 'auth'
   process.env.VERIFICATION_CODES_TABLE_NAME = 'verification-codes-table'
   process.env.VERIFICATION_CODE_TTL_SECONDS = '600'
   process.env.VERIFICATION_CODE_MAX_ATTEMPTS = '5'
@@ -50,6 +53,8 @@ afterEach(() => {
   delete process.env.SESSION_SIGNING_KEY_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
+  delete process.env.TENANTS_TABLE_NAME
+  delete process.env.AUTH_APP_TENANT_ID
   delete process.env.VERIFICATION_CODES_TABLE_NAME
   delete process.env.VERIFICATION_CODE_TTL_SECONDS
   delete process.env.VERIFICATION_CODE_MAX_ATTEMPTS
@@ -73,6 +78,7 @@ function cookieValue(setCookie: string): string {
 
 describe('auth-api handler', () => {
   it('POST /auth/identify returns method=password and sets the identify cookie', async () => {
+    ddbMock.on(GetCommand).resolves({})
     const res = await handler(event('POST /auth/identify', { body: { identifier: 'jane@x.com' } }))
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body!)).toEqual({ method: 'password' })
@@ -80,11 +86,20 @@ describe('auth-api handler', () => {
     expect(setCookie).toContain('HttpOnly')
     expect(await verifySession(cookieValue(setCookie), KEY)).toMatchObject({
       identifier: 'jane@x.com',
+      tenantId: 'auth',
     })
   })
 
   it('POST /auth/identify 400s on an empty identifier', async () => {
     const res = await handler(event('POST /auth/identify', { body: { identifier: '' } }))
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /auth/identify 400s on an unrecognized client_id', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] })
+    const res = await handler(
+      event('POST /auth/identify', { body: { identifier: 'jane@x.com', client_id: 'nope' } }),
+    )
     expect(res.statusCode).toBe(400)
   })
 
