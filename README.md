@@ -40,25 +40,35 @@ either `"tenant"` (ordinary tenant-scoped roles, including a tenant admin) or
 different scope. Single-tenant is the default mode: exactly one implicit
 tenant, no tenant table, no tenant switcher.
 
-The JWT itself only carries two custom claims: `permissions` (a comma-joined
-privilege list) and `tenantId`. There is no separate "scope" claim — scope is
-encoded directly in each privilege string. The bundled `admin-api`
-(`packages/lambda-src/src/admin-api`) commits to a concrete convention for
-its own privileges, documented here since it's the one piece of this repo
-that actually enforces it (downstream consumers of `vlinder_auth` are free to
-invent their own privilege vocabulary for their own APIs):
+Privileges are `verb:tenant-id:resource-glob` (gitignore-style globbing:
+`*` within a path segment, `**` across segments). Where the tenant is
+irrelevant, `verb:resource-glob`, `verb::resource-glob` and
+`verb:*:resource-glob` are equivalent spellings. A user can be logged in on
+more than one tenant at once, so the JWT carries a space-separated `tenants`
+claim naming every tenant the session is actually authenticated against,
+alongside the resolved privileges as a standard, space-separated OAuth
+`scope` claim (not a comma-joined `permissions` claim, and not a singular
+`tenantId`). A tenant-wildcard (`verb:*:resource-glob`) privilege reaches
+only the tenants in `tenants`, never every tenant that exists -- a tenant
+the caller never authenticated against may sit behind a different identity
+provider entirely, so a wildcard grant is not a bypass of that. The bundled
+`admin-api` (`packages/lambda-src/src/admin-api`)
+commits to a concrete convention for its own privileges, documented here
+since it's the one piece of this repo that actually enforces it (downstream
+consumers of `vlinder_auth` are free to invent their own privilege
+vocabulary for their own APIs):
 
 ```text
-<privilege-family>:own   e.g. admin:users:read:own   -- same tenant as the caller only
-<privilege-family>:*     e.g. admin:users:read:*      -- every tenant (super-admin)
-<privilege-name>         e.g. admin:roles:read         -- ungated by tenant (reference data)
+read:<tenant-id>:admin/users    -- same tenant as the caller only
+write:*:admin/users             -- every tenant (super-admin)
+read:admin/roles                -- ungated by tenant (reference data)
 ```
 
 `assertTenantAccess` (`admin-api/authz.ts`) is the defense-in-depth check
 every handler runs independently of the JWT authorizer: it re-derives the
-caller's privileges from the claims and rejects any request whose privilege
-scope doesn't cover the target tenant, rather than trusting that the
-authorizer's mere presence was enough.
+caller's scopes from the claims and rejects any request whose scopes don't
+cover the target tenant, rather than trusting that the authorizer's mere
+presence was enough.
 
 ## Development
 

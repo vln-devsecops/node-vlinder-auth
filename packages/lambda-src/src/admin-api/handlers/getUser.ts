@@ -2,19 +2,14 @@ import {
   AdminGetUserCommand,
   type CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { assertTenantAccess, type CallerContext } from '../authz'
-import type { AssignedRole, RoleActivation } from '../../shared/types'
+import { ADMIN_USERS_READ } from '../privileges'
+import { loadTargetUsersSoleTenant } from '../targetTenant'
+import type { AssignedRole } from '../../shared/types'
 import type { AdminUserSummary } from './listUsers'
 
-const PRIVILEGE_FAMILY = 'admin:users:read'
-
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'NotFoundError'
-  }
-}
+export { NotFoundError } from '../targetTenant'
 
 export interface GetUserParams {
   caller: CallerContext
@@ -30,29 +25,17 @@ export async function getUser(params: GetUserParams): Promise<AdminUserSummary> 
   const { caller, targetUserId, ddbDocClient, cognitoClient, roleAssignmentsTableName, userPoolId } =
     params
 
-  const result = await ddbDocClient.send(
-    new QueryCommand({
-      TableName: roleAssignmentsTableName,
-      KeyConditionExpression: 'userId = :u',
-      ExpressionAttributeValues: { ':u': targetUserId },
-    }),
+  const { tenantId, rows } = await loadTargetUsersSoleTenant(
+    ddbDocClient,
+    roleAssignmentsTableName,
+    targetUserId,
   )
+  const roles: AssignedRole[] = rows.map((row) => ({
+    roleId: row.roleId,
+    activation: row.activation ?? 'default',
+  }))
 
-  const rows = (result.Items ?? []) as Array<{
-    tenantId: string
-    roleId: string
-    activation?: RoleActivation
-  }>
-  if (rows.length === 0) {
-    throw new NotFoundError(`No user found with id ${targetUserId}`)
-  }
-
-  const tenantId = rows[0].tenantId
-  const roles: AssignedRole[] = rows
-    .filter((row) => row.tenantId === tenantId)
-    .map((row) => ({ roleId: row.roleId, activation: row.activation ?? 'default' }))
-
-  assertTenantAccess(caller, PRIVILEGE_FAMILY, tenantId)
+  assertTenantAccess(caller, ADMIN_USERS_READ, tenantId)
 
   const cognitoUser = await cognitoClient.send(
     new AdminGetUserCommand({ UserPoolId: userPoolId, Username: targetUserId }),

@@ -1,5 +1,7 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import { parsePrivilege } from './privilegeMatch'
 import { getRoleDefinition, resolveUserRoleAssignments } from './roles'
+import type { RoleDefinition } from './types'
 
 export interface ResolvePrivilegesForUserParams {
   userId: string
@@ -9,20 +11,53 @@ export interface ResolvePrivilegesForUserParams {
 }
 
 export interface ResolvedPrivileges {
-  tenantId: string | undefined
+  /** Every tenant the user holds a role assignment in -- the `tenants` claim. */
+  tenants: string[]
   /** The active (default) roles whose privileges are unioned into the token. */
   roleIds: string[]
   privileges: string[]
 }
 
 /**
- * Resolves a user's **login** privileges: the deduped union of the privileges
- * of their `default` (active-at-login) roles. Roles the user holds as
- * `elevated` are ignored here -- they contribute nothing until a sudo step-up
- * (future) resolves privileges including chosen elevated roles. This is the
- * boundary between "role" (an app-defined name) and "privilege" (what actually
- * lands in the token) -- callers only ever see privileges and the tenantId,
- * never the role names themselves.
+ * A `tenantScope: 'tenant'` role's catalog entry is written in
+ * tenant-irrelevant form (e.g. `read:users`, reusable across every tenant it
+ * is assigned in) -- the concrete tenant is bound here, at resolution time,
+ * from the caller's own resolved assignment, overriding whatever tenant
+ * segment the catalog entry carries. A `tenantScope: 'global'` role's
+ * privileges (typically already tenant-wildcard, e.g. `write:*:users`) pass
+ * through untouched, since they aren't meant to be confined to one tenant.
+ *
+ * `tenantScope` is per-*role*, not per-privilege: every privilege on a
+ * `tenant`-scoped role is bound, with no way for one of its privileges to
+ * opt out and stay universal. A role that needs to grant both a
+ * tenant-confined privilege and a genuinely tenant-agnostic one should be
+ * split into two catalog entries -- one `tenant`-scoped, one `global`-scoped
+ * -- and assigned together; `resolvePrivilegesForUser` already unions
+ * privileges across every role a user holds.
+ */
+function bindRolePrivileges(role: RoleDefinition | undefined, tenantId: string): string[] {
+  if (!role) {
+    return []
+  }
+  if (role.tenantScope === 'global') {
+    return role.privileges
+  }
+  return role.privileges.map((privilege) => {
+    const parsed = parsePrivilege(privilege)
+    return parsed === undefined ? privilege : `${parsed.verb}:${tenantId}:${parsed.resource}`
+  })
+}
+
+/**
+ * Resolves a user's **login** privileges across every tenant they hold an
+ * assignment in (a user can be logged in on more than one tenant at once):
+ * the deduped union, per tenant, of the privileges of their `default`
+ * (active-at-login) roles, bound to that tenant. Roles the user holds as
+ * `elevated` are ignored here -- they contribute nothing until a sudo
+ * step-up (future) resolves privileges including chosen elevated roles.
+ * This is the boundary between "role" (an app-defined name) and "privilege"
+ * (what actually lands in the token) -- callers only ever see privileges
+ * and the tenant list, never the role names themselves.
  */
 export async function resolvePrivilegesForUser(
   params: ResolvePrivilegesForUserParams,
@@ -36,24 +71,34 @@ export async function resolvePrivilegesForUser(
   })
 
   if (!assignments) {
-    return { tenantId: undefined, roleIds: [], privileges: [] }
+    return { tenants: [], roleIds: [], privileges: [] }
   }
 
-  const activeRoleIds = assignments.roles
-    .filter((role) => role.activation === 'default')
-    .map((role) => role.roleId)
+  // One flat list of (tenant, active role) pairs across every tenant the
+  // user holds, so every getRoleDefinition lookup fires in a single
+  // Promise.all instead of one round per tenant -- this runs inside the
+  // synchronous, timeout-sensitive Cognito pre-token-generation trigger, so
+  // latency should depend on the slowest single lookup, not the number of
+  // tenants the user happens to be logged in on.
+  const activeAssignments = assignments.tenants.flatMap(({ tenantId, roles }) =>
+    roles
+      .filter((role) => role.activation === 'default')
+      .map((role) => ({ tenantId, roleId: role.roleId })),
+  )
 
   const roleDefinitions = await Promise.all(
-    activeRoleIds.map((roleId) =>
+    activeAssignments.map(({ roleId }) =>
       getRoleDefinition({ roleId, tableName: rolesTableName, ddbDocClient }),
     ),
   )
 
-  const privileges = [...new Set(roleDefinitions.flatMap((role) => role?.privileges ?? []))]
+  const privileges = activeAssignments.flatMap(({ tenantId }, index) =>
+    bindRolePrivileges(roleDefinitions[index], tenantId),
+  )
 
   return {
-    tenantId: assignments.tenantId,
-    roleIds: activeRoleIds,
-    privileges,
+    tenants: assignments.tenants.map((tenant) => tenant.tenantId),
+    roleIds: activeAssignments.map(({ roleId }) => roleId),
+    privileges: [...new Set(privileges)],
   }
 }

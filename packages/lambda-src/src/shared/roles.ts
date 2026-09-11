@@ -1,5 +1,5 @@
 import { GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
-import type { RoleActivation, RoleDefinition, UserRoleAssignments } from './types'
+import type { AssignedRole, RoleActivation, RoleDefinition, UserRoleAssignments } from './types'
 
 export interface ResolveUserRoleAssignmentsParams {
   userId: string
@@ -8,13 +8,11 @@ export interface ResolveUserRoleAssignmentsParams {
 }
 
 /**
- * Looks up all of a user's role assignments. A user may hold several roles at
- * once; every one is returned so callers can union their privileges. v1 assumes
- * a user is active in exactly one tenant (assigned at signup by
- * post-confirmation); if the partition ever spans tenants, the first tenant
- * seen anchors the result and only its roles are returned. Supporting a user
- * active across multiple tenants simultaneously is a documented future
- * extension, not v1 scope.
+ * Looks up all of a user's role assignments, grouped by tenant. A user may
+ * hold several roles per tenant, and may hold assignments in more than one
+ * tenant at once -- a user logged in on more than one tenant simultaneously
+ * -- so every row is returned, grouped, rather than anchored to a single
+ * tenant.
  */
 export async function resolveUserRoleAssignments(
   params: ResolveUserRoleAssignmentsParams,
@@ -34,16 +32,25 @@ export async function resolveUserRoleAssignments(
     return undefined
   }
 
-  const tenantId = items[0].tenantId as string
-  const roles = items
-    .filter((item) => item.tenantId === tenantId)
-    .map((item) => ({
+  const rolesByTenant = new Map<string, AssignedRole[]>()
+  for (const item of items) {
+    const tenantId = item.tenantId as string
+    const role: AssignedRole = {
       roleId: item.roleId as string,
       // Older rows written before activation existed default to a login role.
       activation: (item.activation ?? 'default') as RoleActivation,
-    }))
+    }
+    const roles = rolesByTenant.get(tenantId)
+    if (roles) {
+      roles.push(role)
+    } else {
+      rolesByTenant.set(tenantId, [role])
+    }
+  }
 
-  return { userId, tenantId, roles }
+  const tenants = [...rolesByTenant.entries()].map(([tenantId, roles]) => ({ tenantId, roles }))
+
+  return { userId, tenants }
 }
 
 export interface GetRoleDefinitionParams {

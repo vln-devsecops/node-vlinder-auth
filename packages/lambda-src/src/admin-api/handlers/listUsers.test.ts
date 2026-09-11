@@ -2,7 +2,7 @@ import {
   AdminGetUserCommand,
   CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { DynamoDBDocumentClient, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb'
+import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ForbiddenError } from '../authz'
@@ -17,7 +17,7 @@ beforeEach(() => {
 })
 
 describe('listUsers', () => {
-  it('queries only the caller\'s own tenant when scoped to "own"', async () => {
+  it('queries only the caller\'s own tenant for a tenant-scoped grant', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }],
     })
@@ -29,14 +29,13 @@ describe('listUsers', () => {
     })
 
     const result = await listUsers({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:own'] },
+      caller: { tenants: ['acme-corp'], scopes: ['read:acme-corp:admin/users'] },
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
       cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
       roleAssignmentsTableName: 'role-assignments-table',
       userPoolId: 'us-east-1_example',
     })
 
-    expect(ddbMock.commandCalls(ScanCommand)).toHaveLength(0)
     const queryCall = ddbMock.commandCalls(QueryCommand)[0]
     expect(queryCall.args[0].input).toMatchObject({
       TableName: 'role-assignments-table',
@@ -71,7 +70,7 @@ describe('listUsers', () => {
     })
 
     const result = await listUsers({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:own'] },
+      caller: { tenants: ['acme-corp'], scopes: ['read:acme-corp:admin/users'] },
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
       cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
       roleAssignmentsTableName: 'role-assignments-table',
@@ -109,7 +108,7 @@ describe('listUsers', () => {
       })
 
     const result = await listUsers({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:own'] },
+      caller: { tenants: ['acme-corp'], scopes: ['read:acme-corp:admin/users'] },
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
       cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
       roleAssignmentsTableName: 'role-assignments-table',
@@ -121,13 +120,13 @@ describe('listUsers', () => {
     expect(result.users.map((user) => user.userId)).toEqual(['user-1'])
   })
 
-  it('scans across all tenants when scoped to "global"', async () => {
-    ddbMock.on(ScanCommand).resolves({
-      Items: [
-        { userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' },
-        { userId: 'user-2', tenantId: 'globex', roleId: 'tenant-admin' },
-      ],
-    })
+  it('caps a tenant-wildcard grant to exactly the tenants the caller is authenticated against', async () => {
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'acme-corp' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }] })
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'globex' } })
+      .resolves({ Items: [{ userId: 'user-2', tenantId: 'globex', roleId: 'tenant-admin' }] })
     cognitoMock.on(AdminGetUserCommand).resolves({
       Username: 'ignored',
       Enabled: true,
@@ -136,23 +135,23 @@ describe('listUsers', () => {
     })
 
     const result = await listUsers({
-      caller: { tenantId: 'acme-corp', privileges: ['admin:users:read:*'] },
+      // Holds a super-admin-style wildcard grant, but is only authenticated
+      // against two of the tenants that might exist in the system.
+      caller: { tenants: ['acme-corp', 'globex'], scopes: ['read:*:admin/users'] },
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
       cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
       roleAssignmentsTableName: 'role-assignments-table',
       userPoolId: 'us-east-1_example',
     })
 
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0)
-    expect(ddbMock.commandCalls(ScanCommand)).toHaveLength(1)
     expect(result.users).toHaveLength(2)
-    expect(result.users.map((u) => u.tenantId)).toEqual(['acme-corp', 'globex'])
+    expect(result.users.map((u) => u.tenantId).sort()).toEqual(['acme-corp', 'globex'])
   })
 
-  it('rejects a caller with neither the "own" nor "*" read privilege', async () => {
+  it('rejects a wildcard-granted caller authenticated against no tenant at all', async () => {
     await expect(
       listUsers({
-        caller: { tenantId: 'acme-corp', privileges: [] },
+        caller: { tenants: [], scopes: ['read:*:admin/users'] },
         ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
         cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
         roleAssignmentsTableName: 'role-assignments-table',
@@ -161,18 +160,91 @@ describe('listUsers', () => {
     ).rejects.toThrow(ForbiddenError)
 
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0)
-    expect(ddbMock.commandCalls(ScanCommand)).toHaveLength(0)
   })
 
-  it('rejects an "own"-scoped caller with no tenantId claim', async () => {
+  it('rejects a caller with no matching read scope', async () => {
     await expect(
       listUsers({
-        caller: { tenantId: undefined, privileges: ['admin:users:read:own'] },
+        caller: { tenants: ['acme-corp'], scopes: [] },
         ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
         cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
         roleAssignmentsTableName: 'role-assignments-table',
         userPoolId: 'us-east-1_example',
       }),
     ).rejects.toThrow(ForbiddenError)
+
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0)
+  })
+
+  it('unions results across every tenant named by a caller holding several tenant-scoped grants', async () => {
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'acme-corp' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'member' }] })
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'globex' } })
+      .resolves({ Items: [{ userId: 'user-2', tenantId: 'globex', roleId: 'member' }] })
+    cognitoMock.on(AdminGetUserCommand).resolves({
+      Enabled: true,
+      UserStatus: 'CONFIRMED',
+      UserAttributes: [{ Name: 'email', Value: 'someone@example.com' }],
+    })
+
+    const result = await listUsers({
+      caller: {
+        tenants: ['acme-corp', 'globex'],
+        scopes: ['read:acme-corp:admin/users', 'read:globex:admin/users'],
+      },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    })
+
+    expect(result.users.map((u) => u.tenantId).sort()).toEqual(['acme-corp', 'globex'])
+  })
+
+  it('excludes a tenant-scoped grant naming a tenant the caller is not authenticated against', async () => {
+    const result = await listUsers({
+      // Grant names globex, but this session never authenticated to it.
+      caller: { tenants: ['acme-corp'], scopes: ['read:globex:admin/users'] },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    }).catch((error) => error)
+
+    expect(result).toBeInstanceOf(ForbiddenError)
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0)
+  })
+
+  it('does not merge one user\'s roles across tenants when they hold assignments in more than one queried tenant', async () => {
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'acme-corp' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'acme-corp', roleId: 'tenant-admin' }] })
+    ddbMock
+      .on(QueryCommand, { ExpressionAttributeValues: { ':t': 'globex' } })
+      .resolves({ Items: [{ userId: 'user-1', tenantId: 'globex', roleId: 'member' }] })
+    cognitoMock.on(AdminGetUserCommand).resolves({
+      Enabled: true,
+      UserStatus: 'CONFIRMED',
+      UserAttributes: [{ Name: 'email', Value: 'user1@example.com' }],
+    })
+
+    const result = await listUsers({
+      caller: { tenants: ['acme-corp', 'globex'], scopes: ['read:*:admin/users'] },
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
+      roleAssignmentsTableName: 'role-assignments-table',
+      userPoolId: 'us-east-1_example',
+    })
+
+    // Same person, two separate tenant memberships -- each with only its
+    // own tenant's role, not merged into one entry under one tenantId.
+    expect(result.users).toHaveLength(2)
+    const byTenant = new Map(result.users.map((u) => [u.tenantId, u]))
+    expect(byTenant.get('acme-corp')?.roles).toEqual([
+      { roleId: 'tenant-admin', activation: 'default' },
+    ])
+    expect(byTenant.get('globex')?.roles).toEqual([{ roleId: 'member', activation: 'default' }])
   })
 })

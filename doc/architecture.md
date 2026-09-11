@@ -145,6 +145,14 @@ segments. Where the tenant is irrelevant, `verb:resource-glob`,
 is invalid — a privilege always names what it acts on. Scopes travel in tokens
 as a standard space-separated OAuth `scope` claim.
 
+A user can be logged in on more than one tenant simultaneously (holding role
+assignments in each), so the token also carries a space-separated `tenants`
+claim naming every tenant that session is actually authenticated against. A
+tenant-wildcard privilege is capped to that set rather than reaching every
+tenant that exists: the identity provider backing a tenant the caller never
+authenticated to may have entirely different settings, so a wildcard grant
+must not stand in for having actually authenticated there.
+
 Two distinct lookups drive tenancy and identity-provider resolution:
 
 - The calling application's **`client_id` resolves the tenant.**

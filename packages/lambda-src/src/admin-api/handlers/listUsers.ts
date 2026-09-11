@@ -2,11 +2,10 @@ import {
   AdminGetUserCommand,
   type CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { QueryCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
-import { resolveAccessScope, ForbiddenError, type CallerContext } from '../authz'
+import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+import { resolveCallerTenantScope, ForbiddenError, type CallerContext } from '../authz'
+import { ADMIN_USERS_READ } from '../privileges'
 import type { AssignedRole, RoleActivation } from '../../shared/types'
-
-const PRIVILEGE_FAMILY = 'admin:users:read'
 
 export interface AdminUserSummary {
   userId: string
@@ -30,19 +29,28 @@ interface GroupedUser {
   roles: AssignedRole[]
 }
 
-/** Collapses per-role assignment rows into one entry per user, gathering roles. */
+/**
+ * Collapses per-role assignment rows into one entry per (user, tenant),
+ * gathering roles. Keyed on the pair, not just userId: a caller can now
+ * query more than one tenant at once (a tenant-wildcard grant, or several
+ * tenant-scoped ones), and the same user can hold assignments in more than
+ * one of them -- collapsing solely on userId would silently merge a second
+ * tenant's roles into the first tenant's entry, misattributing which tenant
+ * granted them.
+ */
 function groupByUser(rows: AssignmentRow[]): GroupedUser[] {
-  const byUser = new Map<string, GroupedUser>()
+  const byUserAndTenant = new Map<string, GroupedUser>()
   for (const row of rows) {
     const role: AssignedRole = { roleId: row.roleId, activation: row.activation ?? 'default' }
-    const existing = byUser.get(row.userId)
+    const key = `${row.userId}#${row.tenantId}`
+    const existing = byUserAndTenant.get(key)
     if (existing) {
       existing.roles.push(role)
     } else {
-      byUser.set(row.userId, { userId: row.userId, tenantId: row.tenantId, roles: [role] })
+      byUserAndTenant.set(key, { userId: row.userId, tenantId: row.tenantId, roles: [role] })
     }
   }
-  return [...byUser.values()]
+  return [...byUserAndTenant.values()]
 }
 
 export interface ListUsersParams {
@@ -58,26 +66,32 @@ export interface ListUsersResult {
 }
 
 /**
- * Lists users the caller is permitted to see: their own tenant only for an
- * "own"-scoped privilege, or every tenant for a "*"-scoped (super-admin)
- * privilege -- the same mechanism as the token's privilege check, just
- * applied to a listing instead of a single target.
+ * Lists users the caller is permitted to see: the tenant(s) named by their
+ * tenant-scoped grants, capped to the tenants the caller is actually
+ * authenticated against even for a tenant-wildcard (super-admin) grant --
+ * the same mechanism as the token's privilege check, just applied to a
+ * listing instead of a single target. This route takes no tenant parameter
+ * of its own, so there is nothing for the grants to be checked against or
+ * overridden -- the grants are simply the whole answer to "which tenants."
+ * There is deliberately no "every tenant in the system" listing: a
+ * tenant-wildcard grant reaches only tenants the caller has actually
+ * authenticated to, never tenants they haven't.
  */
 export async function listUsers(params: ListUsersParams): Promise<ListUsersResult> {
   const { caller, ddbDocClient, cognitoClient, roleAssignmentsTableName, userPoolId } = params
 
-  const scope = resolveAccessScope(caller, PRIVILEGE_FAMILY)
-  if (scope === 'none') {
-    throw new ForbiddenError(`Missing privilege ${PRIVILEGE_FAMILY}:(own|*)`)
-  }
-  if (scope === 'own' && !caller.tenantId) {
-    throw new ForbiddenError('Caller has no tenantId claim to scope an "own" listing to')
+  const granted = resolveCallerTenantScope(caller, ADMIN_USERS_READ)
+  if (granted.scope === 'none') {
+    throw new ForbiddenError(
+      `Missing privilege ${ADMIN_USERS_READ.verb}:${ADMIN_USERS_READ.resource}`,
+    )
   }
 
-  const assignments =
-    scope === 'global'
-      ? await scanAllAssignments(ddbDocClient, roleAssignmentsTableName)
-      : await queryTenantAssignments(ddbDocClient, roleAssignmentsTableName, caller.tenantId!)
+  const assignments = await queryTenantsAssignments(
+    ddbDocClient,
+    roleAssignmentsTableName,
+    granted.tenantIds,
+  )
 
   const users = await Promise.all(
     groupByUser(assignments).map((user) => hydrateUser(user, cognitoClient, userPoolId)),
@@ -102,12 +116,16 @@ async function queryTenantAssignments(
   return (result.Items ?? []) as AssignmentRow[]
 }
 
-async function scanAllAssignments(
+/** Queries each granted tenant independently and flattens the results. */
+async function queryTenantsAssignments(
   ddbDocClient: DynamoDBDocumentClient,
   tableName: string,
+  tenantIds: string[],
 ): Promise<AssignmentRow[]> {
-  const result = await ddbDocClient.send(new ScanCommand({ TableName: tableName }))
-  return (result.Items ?? []) as AssignmentRow[]
+  const perTenant = await Promise.all(
+    tenantIds.map((tenantId) => queryTenantAssignments(ddbDocClient, tableName, tenantId)),
+  )
+  return perTenant.flat()
 }
 
 async function hydrateUser(

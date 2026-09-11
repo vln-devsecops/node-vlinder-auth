@@ -23,22 +23,30 @@ definitions, a real browser, and real Cognito/DynamoDB — live in
 | `end-user/session.feature` | End user | Redirect to sign-in for a protected page without a session; shared session across the site |
 | `admin/user-management.feature` | Admin | List users (tenant-scoped), view a user, enable/disable, stale-assignment tolerance |
 | `admin/role-management.feature` | Admin | List the role catalog, grant/revoke roles, elevated-by-default grant, idempotency |
-| `admin/access-scope.feature` | Admin | `own` vs `*` tenant-scope enforcement, ungated reference data, missing-privilege refusal |
+| `admin/access-scope.feature` | Admin | Tenant-scoped vs tenant-wildcard grant enforcement, ungated reference data, missing-privilege refusal |
 
 ### Admin actions (v1)
 
 The complete set of actions an admin can take in the first version, and the
-privilege family each is gated on. Every use case above exercises one or more
-of these, and `access-scope.feature` asserts the scope check on each:
+`verb:tenant-id:resource-glob` privilege each is gated on (tenant-id is the
+target tenant being acted on, supplied by the grant itself — see
+[`../rationale.md`](../rationale.md)). Every use case above exercises one or
+more of these, and `access-scope.feature` asserts the scope check on each:
 
-| Action | Route | Privilege family |
+| Action | Route | Privilege |
 | --- | --- | --- |
-| List users in scope | `GET /users` | `admin:users:read` |
-| View a single user | `GET /users/{userId}` | `admin:users:read` |
-| Enable or disable a user | `PATCH /users/{userId}/enabled` | `admin:users:write` |
-| Grant a role to a user | `PUT /users/{userId}/roles/{roleId}` | `admin:users:write` |
-| Revoke a role from a user | `DELETE /users/{userId}/roles/{roleId}` | `admin:users:write` |
-| List the role catalog | `GET /roles` | `admin:roles:read` (ungated by tenant) |
+| List users in scope | `GET /users` | `read:<tenant-id>:admin/users` |
+| View a single user | `GET /users/{userId}` | `read:<tenant-id>:admin/users` |
+| Enable or disable a user | `PATCH /users/{userId}/enabled` | `write:<tenant-id>:admin/users` |
+| Grant a role to a user | `PUT /users/{userId}/roles/{roleId}` | `write:<tenant-id>:admin/users` |
+| Revoke a role from a user | `DELETE /users/{userId}/roles/{roleId}` | `write:<tenant-id>:admin/users` |
+| List the role catalog | `GET /roles` | `read:admin/roles` (tenant-irrelevant) |
+
+A tenant-wildcard grant (`verb:*:resource-glob`, or its equivalent spellings)
+reaches every tenant the caller is authenticated against — a user can be
+logged in on more than one tenant at once (the token's `tenants` claim),
+and a wildcard never reaches beyond that set; a grant naming one tenant-id
+reaches only that tenant.
 
 A grant carries an activation (`elevated` by default — held for a future sudo
 step-up — or `default` for a login-active role); see `role-management.feature`.
@@ -56,9 +64,6 @@ because they are later increments:
 - The **sudo step-up** that activates an `elevated` role — a newly granted
   role is *recorded* as elevated but cannot yet be exercised.
 - Admin-managed identity-provider configuration.
-
-Privileges below are written in the pre-`verb:tenant-id:resource-glob` form
-and are updated by step 1 of [`../plan.md`](../plan.md).
 
 ## Conventions
 

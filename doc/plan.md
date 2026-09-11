@@ -86,17 +86,17 @@ than leaving the question and its resolution here.
 
 Breaking change to how every privilege is written and matched.
 
-- [ ] Adopt `verb:tenant-id:resource-glob` throughout, with gitignore-style
+- [x] Adopt `verb:tenant-id:resource-glob` throughout, with gitignore-style
       globbing (`*` within a segment, `**` across). Treat
       `verb:resource-glob`, `verb::resource-glob` and `verb:*:resource-glob`
       as equivalent; reject a bare `verb`.
-- [ ] Write the matcher TDD-first, including the traversal boundary cases —
+- [x] Write the matcher TDD-first, including the traversal boundary cases —
       this is where a subtle bug grants access it shouldn't.
-- [ ] Emit scopes as a **space-separated** OAuth `scope` claim, not
+- [x] Emit scopes as a **space-separated** OAuth `scope` claim, not
       comma-joined `permissions` (`pre-token-generation/handler.ts`).
-- [ ] Replace `admin-api/authz.ts`'s role-vs-scope intersection with plain
+- [x] Replace `admin-api/authz.ts`'s role-vs-scope intersection with plain
       scope matching: the token is authoritative and carries no roles.
-- [ ] Update the seeded role catalog, every fixture, and the privilege tables
+- [x] Update the seeded role catalog, every fixture, and the privilege tables
       in `use-cases/README.md` to the new form.
 
 ### 2. Client registry and tenancy resolution — Sonnet / **Opus**
@@ -240,6 +240,12 @@ enforced no-`POST`-routes invariant.
       in a token (avatar, preferences, display name). It is not redundant with
       the ID token — the privilege half overlaps, the rest does not, and it
       reflects grants changed server-side after the token was minted.
+- [ ] Design profile inheritance for `/whoami` (a tenant-level profile
+      overriding the global/default one) — raised in PR #103 review as an
+      open question, not yet discussed. Once designed, add the e2e/BDD
+      scenario also raised there: log a user into one tenant, then a second,
+      and assert both the per-tenant and overall token claims plus
+      `/whoami`'s tenant-scoped profile for each.
 - [ ] `POST /sudo`: re-check the grant against `user_role_assignments`, mint an
       elevated access token and a rotated refresh token carrying the grant's
       expiry. Activation never creates a grant.
@@ -350,3 +356,183 @@ done alongside what was.
   SonarQube baseline on `main` had one remaining finding
   (`typescript:S7781`, `AuthChrome.tsx:32`, prefer `replaceAll` over
   `replace`); fixed as part of this step so the baseline is now clean.
+
+- **2026-09-09** — Privilege model rewritten to `verb:tenant-id:resource-glob`
+  (step 1). New `shared/privilegeMatch.ts` — `parsePrivilege`,
+  `matchesResourceGlob` (gitignore-style, recursive segment walk, not a single
+  hand-rolled regex, specifically for the `**`-traversal boundary cases),
+  `hasPrivilege`, `resolveGrantedTenant` — is TDD'd first with 37 cases
+  covering the three equivalent tenant-irrelevant spellings, malformed grants,
+  and traversal boundaries (`*` not crossing `/`, `**` crossing zero or more
+  segments, regex metacharacters in a literal resource treated literally).
+  `pre-token-generation/handler.ts` now emits a space-separated `scope` claim
+  instead of comma-joined `permissions`. `admin-api/authz.ts`'s role-vs-scope
+  intersection (`CallerContext.privileges` + `resolveAccessScope`'s
+  `SCOPE_RANK`) is gone; `CallerContext` now carries only `scopes`, and
+  `assertTenantAccess`/`callerHasPrivilege`/`resolveCallerTenantScope` match
+  against the token's scopes alone. Every admin-api handler's
+  `PRIVILEGE_FAMILY` string became a `{ verb, resource }` pair
+  (`admin:users:read` → `{ verb: 'read', resource: 'admin/users' }`,
+  `admin:roles:read` → `{ verb: 'read', resource: 'admin/roles' }`, tenant
+  passed separately as the target tenant-id rather than embedded via an
+  `:own`/`:*` suffix). `listUsers` now takes the tenant to query from the
+  matched grant itself (`resolveGrantedTenant`) rather than a separate
+  `tenantId` claim, so there is exactly one authoritative source instead of
+  two that could disagree. All fixtures across `lambda-src` and `auth-site`,
+  and the privilege tables/comments in `use-cases/README.md` and the three
+  `admin/*.feature` files, updated to the new form. No Terraform-seeded role
+  catalog exists in this repo to update — that data lives in
+  `terraform-modules`, out of this repo's scope.
+
+  Opus review (required for this security-critical step) caught a real gap
+  the first pass missed: `RoleDefinition.tenantScope` was read from DynamoDB
+  but never used, so a `tenant`-scoped role's catalog privileges had nowhere
+  to pick up the caller's actual tenant — the fixtures I'd written happened
+  to bake a matching tenant-id directly into the catalog entry, which masked
+  it. Fixed by having `resolvePrivilegesForUser` bind a `tenant`-scoped
+  role's privileges to the caller's resolved tenant at resolution time
+  (`shared/privileges.ts`'s new `bindRolePrivileges`), so the catalog itself
+  stores reusable, tenant-irrelevant privilege templates and only becomes
+  tenant-concrete at token issuance; `global`-scoped roles pass through
+  unchanged. The review also caught `resolveGrantedTenant` collapsing several
+  tenant-scoped grants down to the last one seen instead of collecting all of
+  them (a caller holding grants in two tenants would silently see only one in
+  `listUsers`) — fixed to return `tenantIds: string[]`, with `listUsers`
+  querying each and unioning the results. Also addressed: unmemoized
+  per-backtrack regex compilation in `matchesResourceGlob` (precomputed once
+  per call instead), and five handlers each redeclaring an identical
+  `{ verb, resource }` literal (consolidated into `admin-api/privileges.ts`).
+  Not addressed, deliberately: the claim-rename (`permissions` → `scope`)
+  creating a deployment-window lockout for already-issued tokens — moot per
+  this plan's "Current state" (nothing is deployed, no installed base).
+
+  A second Opus review pass on the fixes confirmed both bugs resolved and
+  caught one more: `matchesResourceGlob`'s recursive `**` walk had no
+  memoization, making it exponential in the number of non-adjacent `**`
+  segments crossed with the resource's segment length (empirically ~24s at
+  10 non-adjacent `**`s, unbounded beyond that). Not reachable through
+  today's call sites (fixed 2-segment `admin/users`/`admin/roles` resources),
+  but `privilegeMatch.ts` is shared infrastructure for general
+  `verb:tenant:resource-glob` matching that runs on every admin-api
+  authorization check, so a future deeper resource hierarchy or a typo'd
+  catalog entry with several `**`s would turn this into a CPU-exhaustion /
+  Lambda-timeout DoS on the authorization hot path. Fixed with memoization
+  on `(patternIndex, resourceIndex)`, collapsing it to
+  O(patternSegments × resourceSegments); regression test asserts a
+  12-non-adjacent-`**` pattern resolves in under 500ms.
+
+  A third pass re-flagged the now-fixed `**` finding against a stale diff
+  (confirmed by direct inspection that the memoization commit was already
+  on the branch) and surfaced two real, lower-severity items, both fixed:
+  `resolveCallerTenantScope`/`assertTenantAccess` redeclared the inline
+  `{ verb, resource }` shape instead of reusing `RequiredPrivilege` (now
+  `TenantAgnosticPrivilege = Omit<RequiredPrivilege, 'tenantId'>`); and
+  `bindRolePrivileges` binds every privilege on a `tenant`-scoped role with
+  no way for one to opt out and stay tenant-agnostic, which is fine given
+  `tenantScope` is a per-role property in the architecture spec but was
+  undocumented as a constraint — now documented, with the escape hatch
+  (split a mixed role into a `tenant`-scoped and a `global`-scoped entry,
+  assigned together) spelled out in the docstring.
+
+  User review (not the Opus pass, a direct read of the diff) caught a real
+  design smell the Opus passes missed: `listUsers` had a test explicitly
+  demonstrating that a mismatched `caller.tenantId` claim was silently
+  discarded in favor of whatever tenant the scope named, rather than either
+  being consulted or erroring on disagreement. Investigating why turned up
+  that `CallerContext.tenantId` was already dead everywhere else --
+  `getUser`/`assignRole`/`revokeRole`/`setUserEnabled` derive their target
+  tenant from the resource being acted on, never from this claim, and
+  `listUsers`'s route takes no tenant parameter of its own to check it
+  against. It only ever looked like a second, competing input. Removed
+  `tenantId` from `CallerContext` and `extractCallerContext` entirely (the
+  `scope` claim, which already carries the tenant per privilege, is now the
+  only field read into the caller's authorization context), so there is
+  exactly one source of truth and nothing left to silently prefer over
+  another. The `tenantId` claim itself is untouched at the token level --
+  other consumers (e.g. the SPA, for display) may still read it; only the
+  admin API's own authorization stopped treating it as an input.
+
+  A fourth Opus pass, prompted by the fix above, found the core matcher
+  logic solid (as expected, having already been through three review
+  rounds) but caught documentation drift this PR's own commits should have
+  caught: this repo's top-level `README.md` still documented the retired
+  `permissions` claim and `<family>:own`/`<family>:*` convention as current,
+  contradicting `doc/architecture.md` and the shipped code; `doc/use-cases/README.md`'s
+  Layout table still described `access-scope.feature` in the old `own`/`*`
+  terms a few lines above its own already-updated section. Both fixed. Also
+  fixed: `resolveGrantedTenant` redeclared `{ verb, resource }` inline
+  instead of reusing the shared privilege-check shape (moved
+  `TenantAgnosticPrivilege` into `privilegeMatch.ts` itself, where
+  `RequiredPrivilege` lives, so `admin-api/authz.ts` re-exports rather than
+  redeclares it).
+
+  The same pass also surfaced a genuine cross-repo break: `terraform-modules`'
+  `vlinder_auth` module still seeds its default `admin` role (and both
+  README examples, and `rbac.tftest.hcl`'s fixtures) in the old
+  `admin:users:read:own` form, which the new `parsePrivilege` rejects
+  outright -- every deployment using the default role catalog would get a
+  total admin lockout (every admin API call 403s) the moment it picks up
+  this lambda-src version. Fixed directly in `terraform-modules` on
+  `feature/cognito-auth-module` (the existing draft PR #133 already
+  accumulating the unmerged `vlinder_auth` module -- not yet on `main`, so
+  no live deployment was ever actually at risk): default catalog and both
+  README examples now seed tenant-scoped roles with tenant-irrelevant
+  privilege templates and global-scoped roles with the explicit
+  `verb:*:resource-glob` form, matching the binding behavior
+  `bindRolePrivileges` implements on this side; `rbac.tftest.hcl` updated to
+  match and reverified (`terraform test`, 57/57 passing).
+
+  Follow-on design correction, requested directly: a user can be logged in
+  on more than one tenant at once, and a tenant-wildcard scope must not
+  reach beyond the tenants the caller is actually authenticated against
+  (a tenant the caller never authenticated to may sit behind a different
+  identity provider entirely). This closes a real gap in the design above,
+  not an implementation bug in it. Replaced the singular `tenantId` claim
+  with a space-separated `tenants` claim; `hasPrivilege`/`resolveGrantedTenant`
+  now take the caller's authenticated-tenants set as a required third
+  argument and cap every tenant-wildcard match to it -- a concrete grant
+  naming a tenant outside that set is rejected too, as a defensive backstop.
+  `GrantedTenantScope`'s `'global'` variant is gone: a wildcard now always
+  resolves to a concrete, capped tenant-ID list, so `listUsers`' unfiltered
+  `ScanCommand` branch (previously reachable by any super-admin-style grant,
+  regardless of which tenants they'd actually authenticated to) is deleted
+  entirely -- there is no code path left that lists across the whole table.
+  Lifted the "v1 assumes a user is active in exactly one tenant" restriction
+  in `resolveUserRoleAssignments`/`resolvePrivilegesForUser`: role
+  assignments are now grouped and resolved per tenant rather than anchored
+  to the first tenant seen, so a user's actual holdings across tenants are
+  reflected instead of silently discarded. `CallerContext.tenants` is
+  distinct from the `tenantId` field removed earlier in this step -- that
+  one was genuinely dead (nothing read it); this one is load-bearing, since
+  it's what every wildcard match is capped against. Reflected in
+  `terraform-modules`' `vlinder_auth` README (same PR #133).
+
+  A fifth Opus pass on the multi-tenant correction caught a real,
+  confirmed-live-in-Terraform cross-repo gap: `vlinder_auth`'s
+  `admin_api_authorizer` still set `jwt_forward_claims = ["tenantId",
+  "permissions", "scope"]`, forwarding two retired claim names and never
+  forwarding `tenants` at all -- `extractCallerContext` would have silently
+  read `caller.tenants` as always-empty in production, 403ing every
+  tenant-scoped admin action with no error pointing at the cause. Fixed to
+  `["tenants", "scope"]`; added a contract test asserting exactly those two
+  claim names are forwarded (`admin_api.tftest.hcl`), which needed a new
+  `jwt_forward_claims` output on `http_api_authorizer` since module
+  encapsulation otherwise hides it. It also found three real correctness
+  gaps in this repo, all fixed: `listUsers`' row-grouping keyed solely on
+  `userId`, so a user with assignments in two of the caller's queried
+  tenants had the second tenant's roles silently merged into the first
+  tenant's entry, misattributing which tenant granted them -- now keyed on
+  `(userId, tenantId)`. `getUser`/`assignRole`/`revokeRole`/`setUserEnabled`
+  each anchored to an arbitrary single row (`rows[0]` or a `Limit: 1`
+  query) when looking up a *target* user's tenant, silently dropping or
+  misauthorizing against any other tenant that target held -- unreachable
+  today (no admin-api action can create a target user with assignments in
+  more than one tenant yet) but a live trap now that the data model
+  formally supports it. Replaced with a shared
+  `admin-api/targetTenant.ts#loadTargetUsersSoleTenant`, which throws
+  loudly on a multi-tenant target instead of silently picking one --
+  consolidating four copies of the same lookup into one as a side effect.
+  Also fixed: `resolvePrivilegesForUser` resolved each tenant's role
+  definitions in a sequential loop instead of one `Promise.all` across
+  every tenant, adding avoidable per-tenant latency inside the
+  timeout-sensitive Cognito pre-token-generation trigger.

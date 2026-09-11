@@ -41,14 +41,14 @@ beforeEach(() => {
 })
 
 describe('pre-token-generation handler', () => {
-  it('injects the resolved privileges and tenantId as claims on both the id and access tokens', async () => {
+  it('injects the resolved privileges and tenants as claims on both the id and access tokens', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
     ddbMock.on(GetCommand).resolves({
       Item: {
         roleId: 'tenant-admin',
-        privileges: ['users:read:own', 'users:write:own'],
+        privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
         tenantScope: 'tenant',
       },
     })
@@ -61,13 +61,35 @@ describe('pre-token-generation handler', () => {
       result.response.claimsAndScopeOverrideDetails.accessTokenGeneration?.claimsToAddOrOverride
 
     expect(idClaims).toEqual({
-      permissions: 'users:read:own,users:write:own',
-      tenantId: 'acme-corp',
+      scope: 'read:acme-corp:users write:acme-corp:users',
+      tenants: 'acme-corp',
     })
     expect(accessClaims).toEqual({
-      permissions: 'users:read:own,users:write:own',
-      tenantId: 'acme-corp',
+      scope: 'read:acme-corp:users write:acme-corp:users',
+      tenants: 'acme-corp',
     })
+  })
+
+  it('space-joins the tenants claim for a user logged in on more than one tenant', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' },
+        { userId: 'user-123', tenantId: 'globex', roleId: 'member' },
+      ],
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'tenant-admin' } }).resolves({
+      Item: { roleId: 'tenant-admin', privileges: ['read:users'], tenantScope: 'tenant' },
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'member' } }).resolves({
+      Item: { roleId: 'member', privileges: ['read:users'], tenantScope: 'tenant' },
+    })
+
+    const result = await handler(buildEvent())
+
+    const idClaims =
+      result.response.claimsAndScopeOverrideDetails.idTokenGeneration?.claimsToAddOrOverride
+    expect(idClaims?.tenants).toBe('acme-corp globex')
+    expect(idClaims?.scope).toBe('read:acme-corp:users read:globex:users')
   })
 
   it('never puts the role name itself into the token claims', async () => {
@@ -75,7 +97,7 @@ describe('pre-token-generation handler', () => {
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
     ddbMock.on(GetCommand).resolves({
-      Item: { roleId: 'tenant-admin', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'tenant-admin', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
     })
 
     const result = await handler(buildEvent())
@@ -102,7 +124,7 @@ describe('pre-token-generation handler', () => {
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
     ddbMock.on(GetCommand).resolves({
-      Item: { roleId: 'tenant-admin', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'tenant-admin', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
     })
 
     const event = buildEvent()
@@ -112,9 +134,9 @@ describe('pre-token-generation handler', () => {
       {
         event,
         context: {
-          tenantId: 'acme-corp',
+          tenants: ['acme-corp'],
           roleIds: ['tenant-admin'],
-          privileges: ['users:read:own'],
+          privileges: ['read:acme-corp:users'],
         },
       },
     ])

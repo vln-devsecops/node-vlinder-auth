@@ -10,7 +10,7 @@ beforeEach(() => {
 })
 
 describe('resolveUserRoleAssignments', () => {
-  it('returns all of the user\'s roles with their activation', async () => {
+  it('returns all of the user\'s roles within one tenant, with their activation', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [
         { userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin', activation: 'default' },
@@ -28,11 +28,15 @@ describe('resolveUserRoleAssignments', () => {
 
     expect(assignments).toEqual({
       userId: 'user-123',
-      tenantId: 'acme-corp',
-      roles: [
-        { roleId: 'tenant-admin', activation: 'default' },
-        { roleId: 'billing', activation: 'elevated' },
-        { roleId: 'legacy', activation: 'default' },
+      tenants: [
+        {
+          tenantId: 'acme-corp',
+          roles: [
+            { roleId: 'tenant-admin', activation: 'default' },
+            { roleId: 'billing', activation: 'elevated' },
+            { roleId: 'legacy', activation: 'default' },
+          ],
+        },
       ],
     })
     // No Limit -- must fetch every role the user holds.
@@ -42,6 +46,31 @@ describe('resolveUserRoleAssignments', () => {
       ExpressionAttributeValues: { ':u': 'user-123' },
     })
     expect(queryCall.args[0].input.Limit).toBeUndefined()
+  })
+
+  it('groups roles by tenant when the user holds assignments in more than one', async () => {
+    // A user logged in on more than one tenant at once: role rows span two
+    // tenants under the same userId partition key.
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin', activation: 'default' },
+        { userId: 'user-123', tenantId: 'globex', roleId: 'member', activation: 'default' },
+      ],
+    })
+
+    const assignments = await resolveUserRoleAssignments({
+      userId: 'user-123',
+      tableName: 'role-assignments-table',
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    expect(assignments).toEqual({
+      userId: 'user-123',
+      tenants: [
+        { tenantId: 'acme-corp', roles: [{ roleId: 'tenant-admin', activation: 'default' }] },
+        { tenantId: 'globex', roles: [{ roleId: 'member', activation: 'default' }] },
+      ],
+    })
   })
 
   it('returns undefined when the user has no role assignments', async () => {
@@ -62,7 +91,7 @@ describe('getRoleDefinition', () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         roleId: 'tenant-admin',
-        privileges: ['users:read:own', 'users:write:own'],
+        privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
         tenantScope: 'tenant',
       },
     })
@@ -75,7 +104,7 @@ describe('getRoleDefinition', () => {
 
     expect(role).toEqual({
       roleId: 'tenant-admin',
-      privileges: ['users:read:own', 'users:write:own'],
+      privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
       tenantScope: 'tenant',
     })
   })

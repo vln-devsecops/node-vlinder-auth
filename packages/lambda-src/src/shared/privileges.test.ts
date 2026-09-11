@@ -10,14 +10,17 @@ beforeEach(() => {
 })
 
 describe('resolvePrivilegesForUser', () => {
-  it('resolves the tenantId and deduped privilege list for an assigned user', async () => {
+  it('binds a tenant-scoped role\'s catalog privileges to the caller\'s resolved tenant', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
     ddbMock.on(GetCommand).resolves({
       Item: {
         roleId: 'tenant-admin',
-        privileges: ['users:read:own', 'users:write:own', 'users:read:own'],
+        // The catalog stores tenant-scoped roles in tenant-irrelevant form --
+        // the concrete tenant is bound at resolution time from the caller's
+        // actual assignment, not baked into the catalog entry.
+        privileges: ['read:users', 'write:users', 'read:users'],
         tenantScope: 'tenant',
       },
     })
@@ -30,10 +33,49 @@ describe('resolvePrivilegesForUser', () => {
     })
 
     expect(resolved).toEqual({
-      tenantId: 'acme-corp',
+      tenants: ['acme-corp'],
       roleIds: ['tenant-admin'],
-      privileges: ['users:read:own', 'users:write:own'],
+      privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
     })
+  })
+
+  it('binds the same catalog role to a different tenant for a different user', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ userId: 'user-456', tenantId: 'globex', roleId: 'tenant-admin' }],
+    })
+    ddbMock.on(GetCommand).resolves({
+      Item: { roleId: 'tenant-admin', privileges: ['read:users'], tenantScope: 'tenant' },
+    })
+
+    const resolved = await resolvePrivilegesForUser({
+      userId: 'user-456',
+      roleAssignmentsTableName: 'role-assignments-table',
+      rolesTableName: 'roles-table',
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    // Same role catalog entry, bound to a different caller's real tenant --
+    // proves the tenant comes from the assignment, not something baked into
+    // the role definition.
+    expect(resolved.privileges).toEqual(['read:globex:users'])
+  })
+
+  it('leaves a global-scoped role\'s privileges untouched (already tenant-wildcard)', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'superadmin' }],
+    })
+    ddbMock.on(GetCommand).resolves({
+      Item: { roleId: 'superadmin', privileges: ['write:*:users'], tenantScope: 'global' },
+    })
+
+    const resolved = await resolvePrivilegesForUser({
+      userId: 'user-123',
+      roleAssignmentsTableName: 'role-assignments-table',
+      rolesTableName: 'roles-table',
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    expect(resolved.privileges).toEqual(['write:*:users'])
   })
 
   it('unions (deduped) the privileges of every role the user holds', async () => {
@@ -44,12 +86,12 @@ describe('resolvePrivilegesForUser', () => {
       ],
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'reader' } }).resolves({
-      Item: { roleId: 'reader', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'reader', privileges: ['read:users'], tenantScope: 'tenant' },
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'billing' } }).resolves({
       Item: {
         roleId: 'billing',
-        privileges: ['users:read:own', 'billing:write:own'],
+        privileges: ['read:users', 'write:billing'],
         tenantScope: 'tenant',
       },
     })
@@ -61,10 +103,10 @@ describe('resolvePrivilegesForUser', () => {
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
     })
 
-    expect(resolved.tenantId).toBe('acme-corp')
+    expect(resolved.tenants).toEqual(['acme-corp'])
     expect(resolved.roleIds).toEqual(['reader', 'billing'])
     expect([...resolved.privileges].sort()).toEqual(
-      ['billing:write:own', 'users:read:own'].sort(),
+      ['write:acme-corp:billing', 'read:acme-corp:users'].sort(),
     )
   })
 
@@ -76,10 +118,10 @@ describe('resolvePrivilegesForUser', () => {
       ],
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'reader' } }).resolves({
-      Item: { roleId: 'reader', privileges: ['users:read:own'], tenantScope: 'tenant' },
+      Item: { roleId: 'reader', privileges: ['read:users'], tenantScope: 'tenant' },
     })
     ddbMock.on(GetCommand, { Key: { roleId: 'superadmin' } }).resolves({
-      Item: { roleId: 'superadmin', privileges: ['users:write:*'], tenantScope: 'global' },
+      Item: { roleId: 'superadmin', privileges: ['write:*:users'], tenantScope: 'global' },
     })
 
     const resolved = await resolvePrivilegesForUser({
@@ -91,7 +133,64 @@ describe('resolvePrivilegesForUser', () => {
 
     // superadmin is held but elevated -> its privileges must NOT be in the login token.
     expect(resolved.roleIds).toEqual(['reader'])
-    expect(resolved.privileges).toEqual(['users:read:own'])
+    expect(resolved.privileges).toEqual(['read:acme-corp:users'])
+  })
+
+  it('resolves privileges independently per tenant for a user logged in on more than one', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' },
+        { userId: 'user-123', tenantId: 'globex', roleId: 'member' },
+      ],
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'tenant-admin' } }).resolves({
+      Item: { roleId: 'tenant-admin', privileges: ['read:users', 'write:users'], tenantScope: 'tenant' },
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'member' } }).resolves({
+      Item: { roleId: 'member', privileges: ['read:users'], tenantScope: 'tenant' },
+    })
+
+    const resolved = await resolvePrivilegesForUser({
+      userId: 'user-123',
+      roleAssignmentsTableName: 'role-assignments-table',
+      rolesTableName: 'roles-table',
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    expect(resolved.tenants.sort()).toEqual(['acme-corp', 'globex'])
+    expect(resolved.roleIds.sort()).toEqual(['member', 'tenant-admin'])
+    expect([...resolved.privileges].sort()).toEqual(
+      ['read:acme-corp:users', 'read:globex:users', 'write:acme-corp:users'].sort(),
+    )
+  })
+
+  it('caps a global-scoped role held in one tenant to that resolution -- it does not leak into a second tenant\'s bindings', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'superadmin' },
+        { userId: 'user-123', tenantId: 'globex', roleId: 'member' },
+      ],
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'superadmin' } }).resolves({
+      Item: { roleId: 'superadmin', privileges: ['write:*:users'], tenantScope: 'global' },
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'member' } }).resolves({
+      Item: { roleId: 'member', privileges: ['read:users'], tenantScope: 'tenant' },
+    })
+
+    const resolved = await resolvePrivilegesForUser({
+      userId: 'user-123',
+      roleAssignmentsTableName: 'role-assignments-table',
+      rolesTableName: 'roles-table',
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    // The global grant appears once (it's the same literal string regardless
+    // of which tenant's resolution loop produced it) and the tenant-scoped
+    // grant is bound only to its own tenant.
+    expect([...resolved.privileges].sort()).toEqual(
+      ['read:globex:users', 'write:*:users'].sort(),
+    )
   })
 
   it('returns no tenant/privileges when the user has no role assignment', async () => {
@@ -105,7 +204,7 @@ describe('resolvePrivilegesForUser', () => {
     })
 
     expect(resolved).toEqual({
-      tenantId: undefined,
+      tenants: [],
       roleIds: [],
       privileges: [],
     })
