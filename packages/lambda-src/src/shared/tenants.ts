@@ -13,6 +13,11 @@ export interface ResolveTenantForNewUserParams {
   ddbDocClient: DynamoDBDocumentClient
 }
 
+/** The part of an email after `@`, lowercased; `undefined` for anything without one. */
+function extractEmailDomain(email: string): string | undefined {
+  return email.split('@')[1]?.toLowerCase()
+}
+
 /**
  * Resolves which tenant a newly-confirmed user belongs to. In single-tenant
  * mode this is always the configured default tenant, with no DynamoDB call.
@@ -29,7 +34,7 @@ export async function resolveTenantForNewUser(
     return config.defaultTenantId
   }
 
-  const domain = email.split('@')[1]?.toLowerCase()
+  const domain = extractEmailDomain(email)
   if (!domain) {
     return config.defaultTenantId
   }
@@ -123,7 +128,7 @@ export async function resolveIdentityProviderForDomain(
 ): Promise<string | undefined> {
   const { tenantId, email, tenantsTableName, ddbDocClient } = params
 
-  const domain = email.split('@')[1]?.toLowerCase()
+  const domain = extractEmailDomain(email)
   if (!domain) {
     return undefined
   }
