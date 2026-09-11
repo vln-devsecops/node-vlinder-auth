@@ -126,10 +126,12 @@ Breaking change to how every privilege is written and matched.
 
 ### 4. Edge response headers — Sonnet / Sonnet
 
-- [ ] `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
+- [x] `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
       'none'` on the default behavior, via a response-headers policy.
-- [ ] Explicit contract tests for both. File the tracking issue on
-      `workspace-vlinder-auth`.
+- [x] Explicit contract tests for both. File the tracking issue on
+      `workspace-vlinder-auth`
+      ([#5](https://github.com/vln-devsecops/workspace-vlinder-auth/issues/5)
+      — whether the `/api/v1/*` API behaviors need their own header posture).
 
 ### 4a. Publish the OIDC discovery document — Sonnet / **Opus (security-critical)**
 
@@ -642,3 +644,25 @@ done alongside what was.
   design. `doc/architecture.md` and `doc/vendor-neutral-auth.md` already
   described this target end-state (written ahead of the code, evidently
   for this exact step) and needed no changes.
+
+- **2026-09-11** — Step 4 (edge response headers). `terraform-modules` (same
+  feature branch, PR #133): a new `aws_cloudfront_response_headers_policy`
+  attached to the auth site's default cache behavior only -- the login/admin
+  SPA, not the `/api/v1/*`/`/api/v1/auth*` API behaviors, which serve JSON
+  rather than framable HTML. Sets `X-Frame-Options: DENY` and
+  `Content-Security-Policy: frame-ancestors 'none'`, per `architecture.md`'s
+  already-written "Edge response headers" section. Also added
+  `Strict-Transport-Security` (2-year max-age, subdomains included) beyond
+  the plan's literal two headers, since Checkov's `CKV_AWS_259` flagged its
+  absence and the distribution already forces HTTPS on every behavior
+  anyway; left unpreloaded and skipped the check's `preload=true` mandate
+  with a documented reason -- HSTS preload registration is a deliberate,
+  hard-to-reverse choice for the caller's own domain that this reusable
+  module shouldn't make on every consumer's behalf. Removed the
+  now-incorrect `CKV2_AWS_32` skip on the distribution itself (it now
+  genuinely has a response-headers policy). New contract tests assert the
+  policy is attached and both required headers are set with `override =
+  true`. Filed the tracking issue
+  ([workspace-vlinder-auth#5](https://github.com/vln-devsecops/workspace-vlinder-auth/issues/5))
+  for whether the API behaviors need their own (different) header posture --
+  out of scope here since clickjacking isn't the concern for a JSON API.
