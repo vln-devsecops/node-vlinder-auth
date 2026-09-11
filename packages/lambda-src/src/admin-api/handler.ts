@@ -53,7 +53,7 @@ export async function handler(
 
   try {
     switch (event.routeKey) {
-      case 'GET /users': {
+      case 'GET /api/v1/users': {
         const result = await listUsers({
           caller,
           ddbDocClient,
@@ -64,7 +64,7 @@ export async function handler(
         return jsonResponse(200, result)
       }
 
-      case 'GET /users/{userId}': {
+      case 'GET /api/v1/users/{userId}': {
         const result = await getUser({
           caller,
           targetUserId: targetUserId!,
@@ -76,7 +76,7 @@ export async function handler(
         return jsonResponse(200, result)
       }
 
-      case 'PATCH /users/{userId}/enabled': {
+      case 'PATCH /api/v1/users/{userId}/enabled': {
         await setUserEnabled({
           caller,
           targetUserId: targetUserId!,
@@ -89,12 +89,12 @@ export async function handler(
         return jsonResponse(204)
       }
 
-      case 'GET /roles': {
+      case 'GET /api/v1/roles': {
         const result = await listRoles({ caller, ddbDocClient, rolesTableName })
         return jsonResponse(200, result)
       }
 
-      case 'PUT /users/{userId}/roles/{roleId}': {
+      case 'PUT /api/v1/users/{userId}/roles/{roleId}': {
         await assignRole({
           caller,
           targetUserId: targetUserId!,
@@ -106,7 +106,7 @@ export async function handler(
         return jsonResponse(204)
       }
 
-      case 'DELETE /users/{userId}/roles/{roleId}': {
+      case 'DELETE /api/v1/users/{userId}/roles/{roleId}': {
         await revokeRole({
           caller,
           targetUserId: targetUserId!,

@@ -118,10 +118,10 @@ Breaking change to how every privilege is written and matched.
 
 ### 3. Stop stripping `/api/v1` — Sonnet / Sonnet
 
-- [ ] Include the prefix in the API Gateway routes for both APIs.
-- [ ] Delete `auth_api_rewrite` entirely; reduce `admin_api_rewrite` to the
+- [x] Include the prefix in the API Gateway routes for both APIs.
+- [x] Delete `auth_api_rewrite` entirely; reduce `admin_api_rewrite` to the
       cookie lift and the `x-origin-verify` strip, with no URI rewrite.
-- [ ] Contract-test that no CloudFront function rewrites an API URI, so a
+- [x] Contract-test that no CloudFront function rewrites an API URI, so a
       future `/api/v2` can be routed alongside.
 
 ### 4. Edge response headers — Sonnet / Sonnet
@@ -604,3 +604,41 @@ done alongside what was.
   `resolveTenantForNewUser`) is untouched and still what assigns a new
   user's tenant; connecting the two is part of the RP handoff work in step
   6, which is also what's meant to extend the identify-session JWS further.
+
+- **2026-09-11** — Step 3 (stop stripping `/api/v1`). In `terraform-modules`
+  (same feature branch as step 2, PR #133): every route in
+  `local.admin_api_routes` and `local.auth_api_routes` now carries the
+  `/api/v1` prefix directly in its `route_key` (e.g. `GET /api/v1/users`,
+  `POST /api/v1/auth/identify`). `aws_cloudfront_function.auth_api_rewrite` is
+  deleted outright -- its template file too -- rather than kept as a stub:
+  the `/api/v1/auth*` behavior's `function_association` is removed
+  entirely, since those routes are public and the origin's `custom_header`
+  override (which unconditionally overwrites any viewer-supplied
+  `X-Origin-Verify`, regardless of what a CloudFront Function does or
+  doesn't strip first) was always the actual enforcement point, not the
+  function's own `delete request.headers[...]` line -- that was
+  redundant defense-in-depth, confirmed by reading how CloudFront origin
+  `custom_header` actually behaves, not assumed. `admin_api_rewrite.js`
+  loses only its `request.uri = request.uri.replace(/^\/api\/v1/, '')`
+  line; the cookie-to-Authorization lift and the `X-Origin-Verify` strip
+  it also does are untouched, since neither is what this step is about.
+  Added a new contract test (`admin_panel.tftest.hcl`) asserting
+  `admin_api_rewrite`'s code contains no `request.uri =` assignment
+  (`spa_viewer_request` is deliberately excluded -- it legitimately
+  rewrites the URI for SPA client-side-routing fallback, an unrelated
+  concern). Updated every existing test asserting on the old unprefixed
+  route-key literals.
+
+  In `node-vlinder-auth`: `auth-api/handler.ts` and `admin-api/handler.ts`
+  had every `case` literal in their `routeKey` switches updated to match
+  (API Gateway's `route_key` is exactly what `event.routeKey` carries at
+  runtime, so a mismatch here would 404 every route). The SPA
+  (`auth-site/main.tsx`, `admin-main.ts`) needed **no changes at all**: it
+  was already sending `/api/v1/...` paths (per `architecture.md`'s
+  already-written "fixed infrastructure constant, never config" framing)
+  -- the CloudFront function was the only thing rewriting them down to the
+  unprefixed form the API Gateway routes used to expect, so removing it
+  and prefixing the routes to match is the whole fix, symmetric by
+  design. `doc/architecture.md` and `doc/vendor-neutral-auth.md` already
+  described this target end-state (written ahead of the code, evidently
+  for this exact step) and needed no changes.

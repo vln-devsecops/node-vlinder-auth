@@ -77,9 +77,9 @@ function cookieValue(setCookie: string): string {
 }
 
 describe('auth-api handler', () => {
-  it('POST /auth/identify returns method=password and sets the identify cookie', async () => {
+  it('POST /api/v1/auth/identify returns method=password and sets the identify cookie', async () => {
     ddbMock.on(GetCommand).resolves({})
-    const res = await handler(event('POST /auth/identify', { body: { identifier: 'jane@x.com' } }))
+    const res = await handler(event('POST /api/v1/auth/identify', { body: { identifier: 'jane@x.com' } }))
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body!)).toEqual({ method: 'password' })
     const setCookie = res.cookies!.find((c) => c.startsWith(IDENTIFY_SESSION_COOKIE))!
@@ -90,20 +90,20 @@ describe('auth-api handler', () => {
     })
   })
 
-  it('POST /auth/identify 400s on an empty identifier', async () => {
-    const res = await handler(event('POST /auth/identify', { body: { identifier: '' } }))
+  it('POST /api/v1/auth/identify 400s on an empty identifier', async () => {
+    const res = await handler(event('POST /api/v1/auth/identify', { body: { identifier: '' } }))
     expect(res.statusCode).toBe(400)
   })
 
-  it('POST /auth/identify 400s on an unrecognized client_id', async () => {
+  it('POST /api/v1/auth/identify 400s on an unrecognized client_id', async () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] })
     const res = await handler(
-      event('POST /auth/identify', { body: { identifier: 'jane@x.com', client_id: 'nope' } }),
+      event('POST /api/v1/auth/identify', { body: { identifier: 'jane@x.com', client_id: 'nope' } }),
     )
     expect(res.statusCode).toBe(400)
   })
 
-  it('POST /auth/password sets the token as an HttpOnly cookie and returns only expiresAt', async () => {
+  it('POST /api/v1/auth/password sets the token as an HttpOnly cookie and returns only expiresAt', async () => {
     ddbMock.on(GetCommand).resolves({})
     cognitoMock.on(AdminInitiateAuthCommand).resolves({
       AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
@@ -112,7 +112,7 @@ describe('auth-api handler', () => {
     const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
 
     const res = await handler(
-      event('POST /auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
+      event('POST /api/v1/auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
     )
 
     expect(res.statusCode).toBe(200)
@@ -128,7 +128,7 @@ describe('auth-api handler', () => {
     expect(setCookie).toContain('Path=/')
   })
 
-  it('POST /auth/password 401s on bad credentials without an AS cookie', async () => {
+  it('POST /api/v1/auth/password 401s on bad credentials without an AS cookie', async () => {
     ddbMock.on(GetCommand).resolves({})
     cognitoMock
       .on(AdminInitiateAuthCommand)
@@ -137,7 +137,7 @@ describe('auth-api handler', () => {
     const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
 
     const res = await handler(
-      event('POST /auth/password', { body: { password: 'wrong' }, cookies: [identifyCookie] }),
+      event('POST /api/v1/auth/password', { body: { password: 'wrong' }, cookies: [identifyCookie] }),
     )
 
     expect(res.statusCode).toBe(401)
@@ -145,11 +145,11 @@ describe('auth-api handler', () => {
   })
 
   it('401s when the password step has no identify cookie', async () => {
-    const res = await handler(event('POST /auth/password', { body: { password: 'pw' } }))
+    const res = await handler(event('POST /api/v1/auth/password', { body: { password: 'pw' } }))
     expect(res.statusCode).toBe(401)
   })
 
-  it('POST /auth/password 401s when a signup verification code is still pending', async () => {
+  it('POST /api/v1/auth/password 401s when a signup verification code is still pending', async () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         email: 'jane@x.com',
@@ -163,21 +163,21 @@ describe('auth-api handler', () => {
     const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
 
     const res = await handler(
-      event('POST /auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
+      event('POST /api/v1/auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
     )
 
     expect(res.statusCode).toBe(401)
     expect(cognitoMock.commandCalls(AdminInitiateAuthCommand)).toHaveLength(0)
   })
 
-  it('POST /auth/signup routes to Cognito SignUp and sends the first verification code', async () => {
+  it('POST /api/v1/auth/signup routes to Cognito SignUp and sends the first verification code', async () => {
     cognitoMock.on(SignUpCommand).resolves({ UserSub: 'sub-1' })
     ddbMock.on(GetCommand).resolves({})
     ddbMock.on(PutCommand).resolves({})
     sesMock.on(SendEmailCommand).resolves({})
 
     const res = await handler(
-      event('POST /auth/signup', {
+      event('POST /api/v1/auth/signup', {
         body: { email: 'jane@x.com', password: 'pw', givenName: 'Jane', familyName: 'Doe' },
       }),
     )
@@ -202,7 +202,7 @@ describe('auth-api handler', () => {
       .rejects(new UsernameExistsException({ message: 'User already exists', $metadata: {} }))
 
     const res = await handler(
-      event('POST /auth/signup', {
+      event('POST /api/v1/auth/signup', {
         body: { email: 'jane@x.com', password: 'pw', givenName: 'Jane', familyName: 'Doe' },
       }),
     )
@@ -211,7 +211,7 @@ describe('auth-api handler', () => {
     expect(JSON.parse(res.body!).error).toBe('User already exists')
   })
 
-  it('POST /auth/confirm validates the code against the table and deletes it', async () => {
+  it('POST /api/v1/auth/confirm validates the code against the table and deletes it', async () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         email: 'jane@x.com',
@@ -224,14 +224,14 @@ describe('auth-api handler', () => {
     ddbMock.on(DeleteCommand).resolves({})
 
     const res = await handler(
-      event('POST /auth/confirm', { body: { email: 'jane@x.com', code: '123456' } }),
+      event('POST /api/v1/auth/confirm', { body: { email: 'jane@x.com', code: '123456' } }),
     )
 
     expect(res.statusCode).toBe(200)
     expect(ddbMock.commandCalls(DeleteCommand)).toHaveLength(1)
   })
 
-  it('POST /auth/confirm 400s on a wrong code', async () => {
+  it('POST /api/v1/auth/confirm 400s on a wrong code', async () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         email: 'jane@x.com',
@@ -244,36 +244,36 @@ describe('auth-api handler', () => {
     ddbMock.on(UpdateCommand).resolves({})
 
     const res = await handler(
-      event('POST /auth/confirm', { body: { email: 'jane@x.com', code: '000000' } }),
+      event('POST /api/v1/auth/confirm', { body: { email: 'jane@x.com', code: '000000' } }),
     )
 
     expect(res.statusCode).toBe(400)
   })
 
-  it('POST /auth/resend gets-or-creates a code and re-sends it', async () => {
+  it('POST /api/v1/auth/resend gets-or-creates a code and re-sends it', async () => {
     ddbMock.on(GetCommand).resolves({})
     ddbMock.on(PutCommand).resolves({})
     sesMock.on(SendEmailCommand).resolves({})
 
-    const res = await handler(event('POST /auth/resend', { body: { email: 'jane@x.com' } }))
+    const res = await handler(event('POST /api/v1/auth/resend', { body: { email: 'jane@x.com' } }))
 
     expect(res.statusCode).toBe(200)
     expect(sesMock.commandCalls(SendEmailCommand)).toHaveLength(1)
   })
 
-  it('POST /auth/forgot sends a code when the account exists', async () => {
+  it('POST /api/v1/auth/forgot sends a code when the account exists', async () => {
     cognitoMock.on(AdminGetUserCommand).resolves({ Username: 'jane@x.com' })
     ddbMock.on(GetCommand).resolves({})
     ddbMock.on(PutCommand).resolves({})
     sesMock.on(SendEmailCommand).resolves({})
 
-    const res = await handler(event('POST /auth/forgot', { body: { email: 'jane@x.com' } }))
+    const res = await handler(event('POST /api/v1/auth/forgot', { body: { email: 'jane@x.com' } }))
 
     expect(res.statusCode).toBe(200)
     expect(sesMock.commandCalls(SendEmailCommand)).toHaveLength(1)
   })
 
-  it('POST /auth/reset validates the code, then sets the password via AdminSetUserPassword', async () => {
+  it('POST /api/v1/auth/reset validates the code, then sets the password via AdminSetUserPassword', async () => {
     ddbMock.on(GetCommand).resolves({
       Item: {
         email: 'jane@x.com',
@@ -286,7 +286,7 @@ describe('auth-api handler', () => {
     cognitoMock.on(AdminSetUserPasswordCommand).resolves({})
 
     const res = await handler(
-      event('POST /auth/reset', {
+      event('POST /api/v1/auth/reset', {
         body: { email: 'jane@x.com', code: '123456', newPassword: 'new-pw' },
       }),
     )
@@ -301,7 +301,7 @@ describe('auth-api handler', () => {
   })
 
   it('404s an unrecognized route', async () => {
-    const res = await handler(event('GET /auth/nope'))
+    const res = await handler(event('GET /api/v1/auth/nope'))
     expect(res.statusCode).toBe(404)
   })
 })
