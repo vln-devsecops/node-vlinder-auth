@@ -29,3 +29,31 @@ export async function waitForAdminRedirect(world: AuthWorld): Promise<void> {
     throw err
   }
 }
+
+/**
+ * Decodes a JWT's payload without verifying its signature -- fine here,
+ * where the point is comparing one already-trusted claim against the
+ * published discovery document, not validating the token itself (that's the
+ * JWT authorizer's job in real request paths).
+ */
+export function decodeJwtPayload(token: string): Record<string, unknown> {
+  const payload = token.split('.')[1]
+  if (!payload) {
+    throw new Error('Not a JWT: no payload segment')
+  }
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>
+}
+
+/**
+ * Reads the AS session cookie set after a successful sign-in -- this is the
+ * raw Cognito access token, HttpOnly so the SPA's own JS never touches it.
+ * Cookie name must match auth-api/session.ts's AS_SESSION_COOKIE.
+ */
+export async function getSessionAccessToken(world: AuthWorld): Promise<string> {
+  const cookies = await world.context.cookies()
+  const session = cookies.find((cookie) => cookie.name === 'vln_auth_session')
+  if (!session) {
+    throw new Error('No vln_auth_session cookie found -- sign-in must complete first')
+  }
+  return session.value
+}

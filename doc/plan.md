@@ -143,28 +143,28 @@ lockstep. Prerequisite for steps 5, 6 and 8, which all assume consumers can
 discover what to trust. Reasoning in [`rationale.md`](./rationale.md) ("The
 expected issuer is configuration, not a constant").
 
-- [ ] Terraform writes `.well-known/openid-configuration` into the auth-site
+- [x] Terraform writes `.well-known/openid-configuration` into the auth-site
       S3 origin via `local_file`, exactly as it already does `config.json` —
       every value is a per-deployment constant known at apply time.
-- [ ] Populate `issuer` and `jwks_uri` from the existing
+- [x] Populate `issuer` and `jwks_uri` from the existing
       `local.admin_api_issuer_url` (Cognito's real endpoints — **no mirror**,
       so key rotation can never be served stale), plus the first-party
       `authorization_endpoint`, `token_endpoint` and `end_session_endpoint`.
-- [ ] Exempt `/.well-known/*` from `spa_viewer_request`. That path is
+- [x] Exempt `/.well-known/*` from `spa_viewer_request`. That path is
       extensionless by specification, so the SPA fallback currently captures
       it and returns `index.html` with a `200` — a failure that looks like
       success to every consumer. Contract-test the exemption specifically.
-- [ ] Serve it public, cacheable and CORS-open (`Access-Control-Allow-Origin:
+- [x] Serve it public, cacheable and CORS-open (`Access-Control-Allow-Origin:
       *`); it carries nothing secret and browser-side consumers must reach it.
-- [ ] Contract-test that `issuer` is derived from this module's own user pool
+- [x] Contract-test that `issuer` is derived from this module's own user pool
       and that `jwks_uri` resolves, mirroring
       `identity.tftest.hcl`'s existing `issuer_url` assertions.
-- [ ] Cover it in the e2e suite: fetch the document against a real deployment
+- [x] Cover it in the e2e suite: fetch the document against a real deployment
       and validate a live access token's `iss` against the value it publishes,
       rather than against a constant in the test.
-- [ ] Update the `vlinder_auth` README: `issuer_url` is convenience for wiring
+- [x] Update the `vlinder_auth` README: `issuer_url` is convenience for wiring
       a JWT authorizer in the same apply, **not** the integration contract.
-- [ ] Document the spec deviation where integrators will hit it — the
+- [x] Document the spec deviation where integrators will hit it — the
       document's `issuer` will not match its host until self-issuance, so
       strict OIDC libraries reject it. Already written up in
       [`vendor-neutral-auth.md`](./vendor-neutral-auth.md); make sure the
@@ -666,3 +666,45 @@ done alongside what was.
   ([workspace-vlinder-auth#5](https://github.com/vln-devsecops/workspace-vlinder-auth/issues/5))
   for whether the API behaviors need their own (different) header posture --
   out of scope here since clickjacking isn't the concern for a JSON API.
+
+- **2026-09-11** — Step 4a (publish the OIDC discovery document,
+  **security-critical**). Entirely in `terraform-modules`
+  (`feature/cognito-auth-module`, this time as its own PR against that
+  branch rather than a direct push -- see below): a new
+  `local_file.auth_site_discovery_document`, written into the same S3
+  origin as `config.json` and by the same mechanism, at
+  `.well-known/openid-configuration`. `issuer`/`jwks_uri`
+  come straight from `local.admin_api_issuer_url` -- the exact value the
+  admin API's own JWT authorizer already trusts, so there's one source of
+  truth for "what issues our tokens", not a second copy that could drift.
+  `authorization_endpoint`/`token_endpoint`/`end_session_endpoint` are
+  published now even though no handler answers `/api/v1/auth/{authorize,
+  token,logout}` yet (step 6) -- publishing the URL doesn't require the
+  endpoint to exist, same precedent as `/federation` in step 2's `identify`
+  work. `spa_viewer_request.js` gained an early-exit for `/.well-known/*` so
+  it isn't silently rewritten to `index.html` with a `200`. Added a
+  `cors_config` to the existing default-behavior response-headers policy
+  (CORS-open, since a resource server on another origin must be able to
+  fetch the document) -- necessarily behavior-wide, not path-scoped, since a
+  CloudFront response-headers policy applies per-behavior; harmless here
+  since the whole default behavior is already public unauthenticated GETs.
+  `output.issuer_url` now reuses `local.admin_api_issuer_url` instead of
+  duplicating the expression, and both its description and the README are
+  rewritten to say plainly that it's convenience for wiring a JWT authorizer
+  in the same apply, not the integration contract -- the discovery document
+  is. New terraform contract tests cover the file path, issuer/jwks_uri
+  derivation, the three endpoint URLs, the deploy step's redeploy-on-change
+  trigger, the `spa_viewer_request` exemption, and the CORS config. New e2e
+  scenario (`oidc-discovery.feature`) signs in for a real access token,
+  decodes its `iss` (no signature verification -- that's not this test's
+  job), fetches the live discovery document, and asserts the two agree,
+  rather than asserting either against a hardcoded constant.
+
+  Also: per rlc's direction, this is the first terraform-modules change in
+  this line of work done as its own branch + PR *against*
+  `feature/cognito-auth-module` (PR #281) rather than a direct push onto it
+  -- the prior direct-push commit for step 4 was retroactively moved onto
+  its own branch (PR #280) and `feature/cognito-auth-module` force-pushed
+  back to drop it, so every change onto that branch from here on has its
+  own reviewable PR. `feature/cognito-auth-module` (PR #133) itself stays
+  open/unmerged until this whole line of work is done, per rlc.
