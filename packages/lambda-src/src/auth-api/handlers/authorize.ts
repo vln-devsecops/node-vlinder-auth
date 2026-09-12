@@ -25,7 +25,8 @@ export interface AuthorizeParams {
   responseType: string
   codeChallenge: string
   codeChallengeMethod: string
-  state: string
+  /** RFC 6749's own posture: RECOMMENDED, not REQUIRED -- omitted (not forwarded as an empty string) when the RP didn't send one. */
+  state: string | undefined
   config: { tenantsTableName: string }
   ddbDocClient: DynamoDBDocumentClient
 }
@@ -75,12 +76,17 @@ export async function authorize(params: AuthorizeParams): Promise<AuthorizeResul
 
   // Every check passed -- forward to the SPA's own root (same-origin), which
   // reads these off its URL and carries them into /identify and /password.
+  // state is included only when the RP actually sent one -- an empty
+  // `&state=` baked into the URL (and later into a real browser history
+  // entry / access log) for an RP that never sent it is an avoidable wart.
   const query = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     code_challenge: codeChallenge,
-    state,
   })
+  if (state) {
+    query.set('state', state)
+  }
   return { location: `/?${query.toString()}` }
 }
 

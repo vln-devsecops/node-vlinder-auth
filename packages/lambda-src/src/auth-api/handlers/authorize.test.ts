@@ -52,6 +52,13 @@ describe('authorize', () => {
     expect(location.searchParams.get('state')).toBe('rp-state-value')
   })
 
+  it('omits the state param entirely when the RP did not send one, rather than forwarding an empty string', async () => {
+    const result = await authorize(params({ state: undefined }))
+
+    const location = new URL(result.location, 'https://auth.example.com')
+    expect(location.searchParams.has('state')).toBe(false)
+  })
+
   it('rejects an unknown client_id', async () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] })
 

@@ -909,3 +909,27 @@ done alongside what was.
   independently re-verified before proceeding -- catching the
   `verifyOneTimeToken` key-length-validation gap above myself, before any
   Opus pass.
+
+  An Opus pass on that PR caught three more real issues. Two structural:
+  (1) `SESSION_SIGNING_KEY_SECRET_ID` got the same `rate(30 days)` cron
+  rotation as the one-time-token key, but `verifySession` was still
+  single-key -- unlike the 60-second one-time token, the identify-session's
+  300-second TTL gives a real chance of `/identify` and `/password`
+  straddling a rotation. Fixed the same way: `verifySession` now takes a
+  candidate-key list (`shared/secrets.ts` gained `getSecretVersions`,
+  fetching `AWSCURRENT` and, if present, `AWSPREVIOUS` as one call). (2)
+  `handler()`'s prelude fetched the one-time-token key's current+previous
+  versions unconditionally for **every** request regardless of route --
+  contradicting its own doc comment ("only called once per cold start"),
+  which was simply wrong: `handler()` runs on every invocation, not just
+  cold starts, and `getSecretVersion`/`getSecretVersions` are deliberately
+  uncached (a cached version would defeat the whole point of tolerating a
+  rotation without a cold start). Fixed by moving every
+  `getSecret`/`getSecretVersions` call out of the shared prelude and into
+  the specific route cases that actually need it (`/identify`,
+  `/password`, `/token`) -- a `/signup` or `/authorize` request now touches
+  Secrets Manager zero times, tested explicitly. Third, minor: `/authorize`
+  always forwarded `state` even when the RP never sent one, baking an empty
+  `&state=` into the redirect URL (and browser history) instead of omitting
+  it -- `state` is RFC 6749 RECOMMENDED, not REQUIRED, so `authorize()` now
+  treats an absent one as absent, not as `''`.

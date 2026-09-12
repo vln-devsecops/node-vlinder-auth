@@ -50,12 +50,10 @@ export interface SecretVersion {
  * `AWSCURRENT` and `AWSPREVIOUS` versions, needed to verify a token minted
  * just before a key rotation -- see oneTimeToken.ts). Deliberately bypasses
  * `cache` above: that cache is keyed only by secretId and is shared with
- * other secrets (e.g. SESSION_SIGNING_KEY_SECRET_ID) that have no notion of
- * version stages, so making it stage-aware would be a bigger, riskier change
- * to code other callers already depend on. Left uncached on purpose: this is
- * only called once per cold start, during config loading in handler(), never
- * on a hot per-request path, so there is no real cost to always hitting
- * Secrets Manager fresh.
+ * other secrets that have no notion of version stages, so making it
+ * stage-aware would be a bigger, riskier change to code other callers
+ * already depend on. Left uncached on purpose -- see {@link getSecretVersions}
+ * for why that matters, and how its callers avoid paying for it needlessly.
  *
  * Returns undefined -- not an error -- when the requested version stage
  * doesn't exist yet, which is expected and normal for `AWSPREVIOUS` on a
@@ -85,4 +83,33 @@ export async function getSecretVersion(
   }
 
   return { value: response.SecretString, versionId: response.VersionId }
+}
+
+/**
+ * Fetches the current version of a rotatable secret, plus the previous one
+ * if it exists yet (a never-rotated secret has none) -- current always
+ * first. Used wherever a rotation boundary needs tolerating: verifying
+ * something signed/encrypted with whichever version was current a moment
+ * ago, not just the one that's current right now (see session.ts's
+ * `verifySession` and oneTimeToken.ts's `verifyOneTimeToken`).
+ *
+ * Deliberately **not called eagerly for every request** regardless of
+ * route -- both `getSecretVersion` calls this makes are uncached by design
+ * (a cached version would defeat the entire point: never actually seeing a
+ * rotation without a cold start), so calling this from a shared prelude
+ * that runs before every route dispatch would charge two live Secrets
+ * Manager round-trips to requests that have nothing to do with the secret
+ * in question. Call this only from the specific route handler(s) that
+ * actually need it, so the cost lands only on the requests that need it.
+ *
+ * Throws if the secret has no `AWSCURRENT` at all -- that should never
+ * happen for a secret this module provisions and seeds at creation.
+ */
+export async function getSecretVersions(secretId: string): Promise<[SecretVersion, ...SecretVersion[]]> {
+  const current = await getSecretVersion(secretId, 'AWSCURRENT')
+  if (!current) {
+    throw new Error(`Secret ${secretId} has no AWSCURRENT version`)
+  }
+  const previous = await getSecretVersion(secretId, 'AWSPREVIOUS')
+  return previous ? [current, previous] : [current]
 }

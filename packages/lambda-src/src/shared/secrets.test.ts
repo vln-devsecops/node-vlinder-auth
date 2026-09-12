@@ -5,7 +5,7 @@ import {
 } from '@aws-sdk/client-secrets-manager'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { getSecret, getSecretVersion } from './secrets'
+import { getSecret, getSecretVersion, getSecretVersions } from './secrets'
 
 const secretsManagerMock = mockClient(SecretsManagerClient)
 
@@ -117,5 +117,44 @@ describe('getSecretVersion', () => {
     await getSecretVersion('one-time-token-secret', 'AWSCURRENT')
 
     expect(secretsManagerMock.commandCalls(GetSecretValueCommand)).toHaveLength(2)
+  })
+})
+
+describe('getSecretVersions', () => {
+  it('returns current and previous, current first, when both exist', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .resolves({ SecretString: 'current-value', VersionId: 'version-current' })
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSPREVIOUS' })
+      .resolves({ SecretString: 'previous-value', VersionId: 'version-previous' })
+
+    const versions = await getSecretVersions('one-time-token-secret')
+
+    expect(versions).toEqual([
+      { value: 'current-value', versionId: 'version-current' },
+      { value: 'previous-value', versionId: 'version-previous' },
+    ])
+  })
+
+  it('returns just current when the secret has never been rotated', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .resolves({ SecretString: 'current-value', VersionId: 'version-current' })
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSPREVIOUS' })
+      .rejects(new ResourceNotFoundException({ message: 'not found', $metadata: {} }))
+
+    const versions = await getSecretVersions('one-time-token-secret')
+
+    expect(versions).toEqual([{ value: 'current-value', versionId: 'version-current' }])
+  })
+
+  it('throws when the secret has no AWSCURRENT at all', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .rejects(new ResourceNotFoundException({ message: 'not found', $metadata: {} }))
+
+    await expect(getSecretVersions('never-created-secret')).rejects.toThrow(/AWSCURRENT/)
   })
 })

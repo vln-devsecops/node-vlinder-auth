@@ -24,7 +24,7 @@ describe('identify', () => {
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
     })
     expect(result).toEqual({ method: 'password', tenantId: 'auth', identifySession: expect.any(String) })
-    const payload = await verifySession(result.identifySession, KEY)
+    const payload = await verifySession(result.identifySession, [KEY])
     expect(payload).toMatchObject({ identifier: 'jane@example.com', method: 'password', tenantId: 'auth' })
   })
 
@@ -36,7 +36,7 @@ describe('identify', () => {
       config,
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
     })
-    expect(await verifySession(result.identifySession, KEY)).toMatchObject({
+    expect(await verifySession(result.identifySession, [KEY])).toMatchObject({
       identifier: 'jane@example.com',
     })
   })
@@ -99,7 +99,7 @@ describe('identify', () => {
       location: '/federation?provider=okta-acme&action=start',
       identifySession: expect.any(String),
     })
-    const payload = await verifySession(result.identifySession, KEY)
+    const payload = await verifySession(result.identifySession, [KEY])
     expect(payload).toMatchObject({ method: 'redirect', tenantId: 'acme-corp', provider: 'okta-acme' })
   })
 
@@ -125,7 +125,7 @@ describe('identify', () => {
       state: 'rp-state-value',
     })
 
-    const payload = await verifySession(result.identifySession, KEY)
+    const payload = await verifySession(result.identifySession, [KEY])
     expect(payload).toMatchObject({
       identifier: 'jane@example.com',
       redirectUri: 'https://app.example.com/login/callback',

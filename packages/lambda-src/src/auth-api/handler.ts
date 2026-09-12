@@ -4,7 +4,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
 import { getDdbDocClient } from '../shared/ddb-client'
-import { getSecret, getSecretVersion } from '../shared/secrets'
+import { getSecret, getSecretVersions } from '../shared/secrets'
 import { getSesClient } from '../shared/ses-client'
 import { UnknownClientError } from '../shared/tenants'
 import {
@@ -77,7 +77,19 @@ function redirect(location: string, cookies?: string[]): APIGatewayProxyStructur
 }
 
 interface RouteDeps {
-  signingKey: string
+  /**
+   * Secret ids, not fetched values -- resolving these to actual key material
+   * happens inside whichever route case below actually needs it (see the
+   * `POST /identify`/`POST /password`/`POST /token` cases), not eagerly here
+   * for every request regardless of route. This matters specifically for the
+   * one-time-token key: its current+previous lookup is deliberately uncached
+   * (see shared/secrets.ts's `getSecretVersions`), so fetching it in a
+   * shared prelude that runs before every route dispatch would charge two
+   * live Secrets Manager round-trips to routes (`/signup`, `/confirm`,
+   * `/authorize`, ...) that have nothing to do with it.
+   */
+  sessionSigningKeySecretId: string
+  oneTimeTokenKeySecretId: string
   cognitoClient: CognitoIdentityProviderClient
   ddbDocClient: DynamoDBDocumentClient
   sesClient: SESv2Client
@@ -89,15 +101,6 @@ interface RouteDeps {
   verificationCodeTtlSeconds: number
   verificationCodeMaxAttempts: number
   fromAddress: string
-  /** Current key only -- for /password's minting (see handlers/password.ts). */
-  oneTimeTokenKey: OneTimeTokenKey
-  /**
-   * Current key plus the previous one, if Secrets Manager still has it under
-   * AWSPREVIOUS -- for /token's verification, to cover a token minted just
-   * before a rotation and exchanged just after (see oneTimeToken.ts's
-   * verifyOneTimeToken and handlers/token.ts).
-   */
-  oneTimeTokenKeys: OneTimeTokenKey[]
 }
 
 /** Maps a handler-thrown error to its HTTP response, or returns undefined to re-throw. */
@@ -148,7 +151,8 @@ async function routeRequest(
   deps: RouteDeps,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const {
-    signingKey,
+    sessionSigningKeySecretId,
+    oneTimeTokenKeySecretId,
     cognitoClient,
     ddbDocClient,
     sesClient,
@@ -160,13 +164,15 @@ async function routeRequest(
     verificationCodeTtlSeconds,
     verificationCodeMaxAttempts,
     fromAddress,
-    oneTimeTokenKey,
-    oneTimeTokenKeys,
   } = deps
 
   switch (event.routeKey) {
     case 'POST /api/v1/auth/identify': {
       const requestedClientId = bodyString(body.client_id) || undefined
+      // Minting only ever needs the current key -- unlike verifying (see
+      // /password below), there's no rotation-boundary case for a brand
+      // new session.
+      const signingKey = await getSecret(sessionSigningKeySecretId)
       const result = await identify({
         identifier: bodyString(body.identifier),
         clientId: requestedClientId,
@@ -190,13 +196,28 @@ async function routeRequest(
 
     case 'POST /api/v1/auth/password': {
       const cookies = parseCookies(event.cookies)
+      // Verifying the identify session needs current+previous (its 300s TTL
+      // is long enough for a real chance of straddling a rotation); minting
+      // the one-time token (the redirect branch inside password(), if
+      // reached) only ever needs the current one-time-token key -- fetched
+      // here regardless of which branch password() ends up taking, since
+      // that decision happens inside it, after this call already needs the
+      // key in hand.
+      const [signingKeyVersions, oneTimeTokenKeyVersions] = await Promise.all([
+        getSecretVersions(sessionSigningKeySecretId),
+        getSecretVersions(oneTimeTokenKeySecretId),
+      ])
+      const oneTimeTokenKey: OneTimeTokenKey = {
+        keyId: oneTimeTokenKeyVersions[0].versionId,
+        key: oneTimeTokenKeyVersions[0].value,
+      }
       const result = await password({
         identifySession: cookies[IDENTIFY_SESSION_COOKIE],
         password: bodyString(body.password),
         cognitoClient,
         clientId,
         userPoolId,
-        signingKey,
+        signingKeys: signingKeyVersions.map((version) => version.value),
         ddbDocClient,
         verificationCodesTableName,
         oneTimeTokenKey,
@@ -333,7 +354,7 @@ async function routeRequest(
         responseType: queryParam(params, 'response_type'),
         codeChallenge: queryParam(params, 'code_challenge'),
         codeChallengeMethod: queryParam(params, 'code_challenge_method'),
-        state: queryParam(params, 'state'),
+        state: queryParam(params, 'state') || undefined,
         // `scope` (also present per doc/vendor-neutral-auth.md's diagram) is
         // deliberately not read here -- see handlers/authorize.ts's doc
         // comment: it is accepted-and-ignored, never validated or forwarded.
@@ -346,6 +367,9 @@ async function routeRequest(
     }
 
     case 'POST /api/v1/auth/token': {
+      const oneTimeTokenKeys: OneTimeTokenKey[] = (await getSecretVersions(oneTimeTokenKeySecretId)).map(
+        (version) => ({ keyId: version.versionId, key: version.value }),
+      )
       const result = await exchangeToken({
         token: bodyString(body.token),
         codeVerifier: bodyString(body.code_verifier),
@@ -370,31 +394,9 @@ async function routeRequest(
 export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
-  // Fetched as explicit version stages (not via getSecret's plain
-  // cache-by-secretId) because /token's verification must be able to try
-  // both the key that is AWSCURRENT right now and the one that was AWSCURRENT
-  // a moment ago (AWSPREVIOUS) -- see oneTimeToken.ts's verifyOneTimeToken.
-  // AWSPREVIOUS may not exist yet on a secret that has never been rotated,
-  // which getSecretVersion signals with undefined rather than an error.
-  const oneTimeTokenSecretId = requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID')
-  const oneTimeTokenCurrent = await getSecretVersion(oneTimeTokenSecretId, 'AWSCURRENT')
-  if (!oneTimeTokenCurrent) {
-    throw new Error(`Secret ${oneTimeTokenSecretId} has no AWSCURRENT version`)
-  }
-  const oneTimeTokenPrevious = await getSecretVersion(oneTimeTokenSecretId, 'AWSPREVIOUS')
-  const oneTimeTokenKey: OneTimeTokenKey = {
-    keyId: oneTimeTokenCurrent.versionId,
-    key: oneTimeTokenCurrent.value,
-  }
-  const oneTimeTokenKeys: OneTimeTokenKey[] = [
-    oneTimeTokenKey,
-    ...(oneTimeTokenPrevious
-      ? [{ keyId: oneTimeTokenPrevious.versionId, key: oneTimeTokenPrevious.value }]
-      : []),
-  ]
-
   const deps: RouteDeps = {
-    signingKey: await getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID')),
+    sessionSigningKeySecretId: requireEnv('SESSION_SIGNING_KEY_SECRET_ID'),
+    oneTimeTokenKeySecretId: requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID'),
     cognitoClient: getCognitoClient(),
     ddbDocClient: getDdbDocClient(),
     sesClient: getSesClient(),
@@ -406,8 +408,6 @@ export async function handler(
     verificationCodeTtlSeconds: Number(requireEnv('VERIFICATION_CODE_TTL_SECONDS')),
     verificationCodeMaxAttempts: Number(requireEnv('VERIFICATION_CODE_MAX_ATTEMPTS')),
     fromAddress: requireEnv('SES_FROM_ADDRESS'),
-    oneTimeTokenKey,
-    oneTimeTokenKeys,
   }
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 

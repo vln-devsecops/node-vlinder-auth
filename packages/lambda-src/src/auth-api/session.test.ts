@@ -12,14 +12,21 @@ const KEY = 'test-signing-key-000000000000000000000000'
 describe('signSession / verifySession', () => {
   it('round-trips a payload and preserves its claims', async () => {
     const token = await signSession({ identifier: 'jane@example.com', method: 'password' }, KEY, 300)
-    const payload = await verifySession(token, KEY)
+    const payload = await verifySession(token, [KEY])
     expect(payload).toMatchObject({ identifier: 'jane@example.com', method: 'password' })
     expect(typeof payload?.exp).toBe('number')
   })
 
-  it('rejects a token signed with a different key', async () => {
+  it('rejects a token signed with a key not in the candidate list', async () => {
     const token = await signSession({ sub: 'user-1' }, KEY, 300)
-    expect(await verifySession(token, 'a-different-key')).toBeNull()
+    expect(await verifySession(token, ['a-different-key'])).toBeNull()
+  })
+
+  it('succeeds against a token signed with a previous key, when both current and previous are supplied as candidates (rotation boundary)', async () => {
+    const previousKey = 'a-previous-signing-key'
+    const token = await signSession({ sub: 'user-1' }, previousKey, 300)
+    const payload = await verifySession(token, [KEY, previousKey])
+    expect(payload).toMatchObject({ sub: 'user-1' })
   })
 
   it('rejects a tampered payload', async () => {
@@ -30,22 +37,27 @@ describe('signSession / verifySession', () => {
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=+$/, '')
-    expect(await verifySession(`${header}.${forged}.${signature}`, KEY)).toBeNull()
+    expect(await verifySession(`${header}.${forged}.${signature}`, [KEY])).toBeNull()
   })
 
   it('rejects an expired token', async () => {
     const issuedAt = 1_000_000_000_000
     const token = await signSession({ sub: 'user-1' }, KEY, 60, issuedAt)
     // 61s later
-    expect(await verifySession(token, KEY, issuedAt + 61_000)).toBeNull()
+    expect(await verifySession(token, [KEY], issuedAt + 61_000)).toBeNull()
     // still valid at 59s
-    expect(await verifySession(token, KEY, issuedAt + 59_000)).not.toBeNull()
+    expect(await verifySession(token, [KEY], issuedAt + 59_000)).not.toBeNull()
   })
 
   it('returns null for undefined or malformed tokens', async () => {
-    expect(await verifySession(undefined, KEY)).toBeNull()
-    expect(await verifySession('not-a-jws', KEY)).toBeNull()
-    expect(await verifySession('a.b', KEY)).toBeNull()
+    expect(await verifySession(undefined, [KEY])).toBeNull()
+    expect(await verifySession('not-a-jws', [KEY])).toBeNull()
+    expect(await verifySession('a.b', [KEY])).toBeNull()
+  })
+
+  it('returns null when given an empty candidate list', async () => {
+    const token = await signSession({ sub: 'user-1' }, KEY, 300)
+    expect(await verifySession(token, [])).toBeNull()
   })
 })
 

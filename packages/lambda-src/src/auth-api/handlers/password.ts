@@ -44,7 +44,14 @@ export interface PasswordParams {
   cognitoClient: CognitoIdentityProviderClient
   clientId: string
   userPoolId: string
-  signingKey: string
+  /**
+   * Candidate keys for verifying the identify session, current first (see
+   * shared/secrets.ts's `getSecretVersions`). More than one matters here:
+   * the identify session's 300s TTL is long enough for a real chance of
+   * straddling a session-signing-key rotation (see session.ts's
+   * `verifySession`).
+   */
+  signingKeys: string[]
   ddbDocClient: DynamoDBDocumentClient
   verificationCodesTableName: string
   /**
@@ -70,14 +77,14 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
     cognitoClient,
     clientId,
     userPoolId,
-    signingKey,
+    signingKeys,
     ddbDocClient,
     verificationCodesTableName,
     oneTimeTokenKey,
     now,
   } = params
 
-  const claims = await verifySession(identifySession, signingKey, now)
+  const claims = await verifySession(identifySession, signingKeys, now)
   if (!claims || typeof claims.identifier !== 'string') {
     throw new InvalidSessionError('The identify session is missing or has expired.')
   }

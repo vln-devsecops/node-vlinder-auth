@@ -30,7 +30,7 @@ const base = {
   cognitoClient: cognitoMock as unknown as CognitoIdentityProviderClient,
   clientId: 'client-abc',
   userPoolId: 'us-east-1_example',
-  signingKey: KEY,
+  signingKeys: [KEY],
   ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
   verificationCodesTableName: 'verification-codes',
   oneTimeTokenKey: ONE_TIME_TOKEN_KEY,
@@ -104,6 +104,27 @@ describe('password', () => {
       password({ ...base, identifySession: undefined, password: 'x' }),
     ).rejects.toThrow(InvalidSessionError)
     expect(cognitoMock.commandCalls(AdminInitiateAuthCommand)).toHaveLength(0)
+  })
+
+  it('verifies an identify session signed with a previous key, when both current and previous are supplied as candidates (rotation boundary)', async () => {
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+    const previousKey = 'a-previous-signing-key'
+    const identifySession = await signSession(
+      { identifier: 'jane@example.com', method: 'password' },
+      previousKey,
+      300,
+    )
+
+    const result = await password({
+      ...base,
+      signingKeys: [KEY, previousKey],
+      identifySession,
+      password: 'correct horse',
+    })
+
+    expect(result.status).toBe('authenticated')
   })
 
   it('collapses wrong-password and unknown-user into one opaque failure', async () => {

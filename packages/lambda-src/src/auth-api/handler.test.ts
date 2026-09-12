@@ -67,7 +67,16 @@ beforeEach(() => {
       // the current value -- getSecret never passes VersionStage at all.
       return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
     }
-    return { SecretString: KEY }
+    // The session-signing-key secret: /password's getSecretVersions call
+    // needs a VersionId even though there's no AWSPREVIOUS in most of these
+    // tests (getSecretVersion signals "doesn't exist" via
+    // ResourceNotFoundException, not an omitted field -- see below), and
+    // /identify's plain getSecret call ignores VersionId entirely, so
+    // returning one unconditionally here is harmless for both callers.
+    if (input.VersionStage === 'AWSPREVIOUS') {
+      throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+    }
+    return { SecretString: KEY, VersionId: 'session-key-version-current' }
   })
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
   process.env.ONE_TIME_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token'
@@ -118,7 +127,7 @@ describe('auth-api handler', () => {
     expect(JSON.parse(res.body!)).toEqual({ method: 'password' })
     const setCookie = res.cookies!.find((c) => c.startsWith(IDENTIFY_SESSION_COOKIE))!
     expect(setCookie).toContain('HttpOnly')
-    expect(await verifySession(cookieValue(setCookie), KEY)).toMatchObject({
+    expect(await verifySession(cookieValue(setCookie), [KEY])).toMatchObject({
       identifier: 'jane@x.com',
       tenantId: 'auth',
     })
@@ -220,6 +229,12 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
+    // Regression: the session-signing key and one-time-token key must not
+    // be fetched at all for a route that never uses either -- see
+    // shared/secrets.ts's getSecretVersions doc comment on why an eager,
+    // every-route prelude fetch would be wasteful specifically for these
+    // deliberately-uncached lookups.
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand)).toHaveLength(0)
     expect(cognitoMock.commandCalls(SignUpCommand)[0].args[0].input).toMatchObject({
       ClientId: 'client-abc',
       Username: 'jane@x.com',
@@ -365,6 +380,36 @@ describe('auth-api handler', () => {
     const location = new URL(res.headers!.location as string, 'https://auth.example.com')
     expect(location.pathname).toBe('/')
     expect(location.searchParams.get('client_id')).toBe('rp-client')
+    // /authorize needs neither the session-signing key nor the one-time-
+    // token key -- same regression this route class should never trip.
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand)).toHaveLength(0)
+  })
+
+  it('GET /api/v1/auth/authorize omits the state param entirely when the RP did not send one', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          tenantId: 'acme-corp',
+          clientId: 'rp-client',
+          redirectUris: ['https://app.example.com/login/callback'],
+        },
+      ],
+    })
+
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://app.example.com/login/callback',
+          response_type: 'code',
+          code_challenge: 'test-challenge',
+          code_challenge_method: 'S256',
+        },
+      }),
+    )
+
+    const location = new URL(res.headers!.location as string, 'https://auth.example.com')
+    expect(location.searchParams.has('state')).toBe(false)
   })
 
   it('GET /api/v1/auth/authorize 400s on a redirect_uri outside the client allowlist', async () => {
@@ -494,13 +539,13 @@ describe('auth-api handler', () => {
   it('POST /api/v1/auth/token still works with only a current key when Secrets Manager has no AWSPREVIOUS yet (a fresh, never-rotated deployment)', async () => {
     secretsManagerMock.reset()
     secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+      }
       if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
-        if (input.VersionStage === 'AWSPREVIOUS') {
-          throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
-        }
         return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
       }
-      return { SecretString: KEY }
+      return { SecretString: KEY, VersionId: 'session-key-version-current' }
     })
 
     const { createHash } = await import('node:crypto')
@@ -534,13 +579,13 @@ describe('auth-api handler', () => {
   it('POST /api/v1/auth/password still mints a working one-time token when Secrets Manager has no AWSPREVIOUS yet', async () => {
     secretsManagerMock.reset()
     secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+      }
       if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
-        if (input.VersionStage === 'AWSPREVIOUS') {
-          throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
-        }
         return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
       }
-      return { SecretString: KEY }
+      return { SecretString: KEY, VersionId: 'session-key-version-current' }
     })
     ddbMock.on(GetCommand).resolves({})
     cognitoMock.on(AdminInitiateAuthCommand).resolves({
