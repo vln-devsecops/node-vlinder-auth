@@ -35,7 +35,8 @@ describe('resolvePrivilegesForUser', () => {
     expect(resolved).toEqual({
       tenants: ['acme-corp'],
       roleIds: ['tenant-admin'],
-      privileges: ['read:acme-corp:users', 'write:acme-corp:users'],
+      idTokenPrivileges: ['read:acme-corp:users', 'write:acme-corp:users'],
+      accessTokenPrivileges: ['read:acme-corp:users', 'write:acme-corp:users'],
     })
   })
 
@@ -57,7 +58,8 @@ describe('resolvePrivilegesForUser', () => {
     // Same role catalog entry, bound to a different caller's real tenant --
     // proves the tenant comes from the assignment, not something baked into
     // the role definition.
-    expect(resolved.privileges).toEqual(['read:globex:users'])
+    expect(resolved.idTokenPrivileges).toEqual(['read:globex:users'])
+    expect(resolved.accessTokenPrivileges).toEqual(['read:globex:users'])
   })
 
   it('leaves a global-scoped role\'s privileges untouched (already tenant-wildcard)', async () => {
@@ -75,7 +77,8 @@ describe('resolvePrivilegesForUser', () => {
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
     })
 
-    expect(resolved.privileges).toEqual(['write:*:users'])
+    expect(resolved.idTokenPrivileges).toEqual(['write:*:users'])
+    expect(resolved.accessTokenPrivileges).toEqual(['write:*:users'])
   })
 
   it('unions (deduped) the privileges of every role the user holds', async () => {
@@ -105,12 +108,15 @@ describe('resolvePrivilegesForUser', () => {
 
     expect(resolved.tenants).toEqual(['acme-corp'])
     expect(resolved.roleIds).toEqual(['reader', 'billing'])
-    expect([...resolved.privileges].sort()).toEqual(
+    expect([...resolved.idTokenPrivileges].sort()).toEqual(
+      ['write:acme-corp:billing', 'read:acme-corp:users'].sort(),
+    )
+    expect([...resolved.accessTokenPrivileges].sort()).toEqual(
       ['write:acme-corp:billing', 'read:acme-corp:users'].sort(),
     )
   })
 
-  it('unions only the default (login) roles, excluding elevated ones', async () => {
+  it('splits held-plus-active (ID token) from active-only (access token) when a role is elevated', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [
         { userId: 'user-123', tenantId: 'acme-corp', roleId: 'reader', activation: 'default' },
@@ -131,9 +137,19 @@ describe('resolvePrivilegesForUser', () => {
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
     })
 
-    // superadmin is held but elevated -> its privileges must NOT be in the login token.
+    // superadmin is held but elevated -> its privilege must appear on the
+    // held-plus-active (ID token) set, and never on the active-only
+    // (access token) set.
     expect(resolved.roleIds).toEqual(['reader'])
-    expect(resolved.privileges).toEqual(['read:acme-corp:users'])
+    expect([...resolved.idTokenPrivileges].sort()).toEqual(
+      ['read:acme-corp:users', 'write:*:users'].sort(),
+    )
+    expect(resolved.accessTokenPrivileges).toEqual(['read:acme-corp:users'])
+    expect(resolved.accessTokenPrivileges).not.toContain('write:*:users')
+
+    // A single batched fetch covers both sets -- one GetCommand per distinct
+    // held role, not one full pass per token.
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(2)
   })
 
   it('resolves privileges independently per tenant for a user logged in on more than one', async () => {
@@ -159,7 +175,10 @@ describe('resolvePrivilegesForUser', () => {
 
     expect(resolved.tenants.sort()).toEqual(['acme-corp', 'globex'])
     expect(resolved.roleIds.sort()).toEqual(['member', 'tenant-admin'])
-    expect([...resolved.privileges].sort()).toEqual(
+    expect([...resolved.idTokenPrivileges].sort()).toEqual(
+      ['read:acme-corp:users', 'read:globex:users', 'write:acme-corp:users'].sort(),
+    )
+    expect([...resolved.accessTokenPrivileges].sort()).toEqual(
       ['read:acme-corp:users', 'read:globex:users', 'write:acme-corp:users'].sort(),
     )
   })
@@ -188,7 +207,10 @@ describe('resolvePrivilegesForUser', () => {
     // The global grant appears once (it's the same literal string regardless
     // of which tenant's resolution loop produced it) and the tenant-scoped
     // grant is bound only to its own tenant.
-    expect([...resolved.privileges].sort()).toEqual(
+    expect([...resolved.idTokenPrivileges].sort()).toEqual(
+      ['read:globex:users', 'write:*:users'].sort(),
+    )
+    expect([...resolved.accessTokenPrivileges].sort()).toEqual(
       ['read:globex:users', 'write:*:users'].sort(),
     )
   })
@@ -206,7 +228,8 @@ describe('resolvePrivilegesForUser', () => {
     expect(resolved).toEqual({
       tenants: [],
       roleIds: [],
-      privileges: [],
+      idTokenPrivileges: [],
+      accessTokenPrivileges: [],
     })
   })
 
@@ -223,6 +246,7 @@ describe('resolvePrivilegesForUser', () => {
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
     })
 
-    expect(resolved.privileges).toEqual([])
+    expect(resolved.idTokenPrivileges).toEqual([])
+    expect(resolved.accessTokenPrivileges).toEqual([])
   })
 })

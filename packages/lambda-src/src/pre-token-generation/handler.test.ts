@@ -41,7 +41,7 @@ beforeEach(() => {
 })
 
 describe('pre-token-generation handler', () => {
-  it('injects the resolved privileges and tenants as claims on both the id and access tokens', async () => {
+  it('injects identical scope and tenants claims on both tokens when every held role is default-activation', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [{ userId: 'user-123', tenantId: 'acme-corp', roleId: 'tenant-admin' }],
     })
@@ -68,6 +68,38 @@ describe('pre-token-generation handler', () => {
       scope: 'read:acme-corp:users write:acme-corp:users',
       tenants: 'acme-corp',
     })
+  })
+
+  it('puts a held-but-inactive privilege on the ID token and never on the access token', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'reader', activation: 'default' },
+        { userId: 'user-123', tenantId: 'acme-corp', roleId: 'superadmin', activation: 'elevated' },
+      ],
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'reader' } }).resolves({
+      Item: { roleId: 'reader', privileges: ['read:acme-corp:users'], tenantScope: 'tenant' },
+    })
+    ddbMock.on(GetCommand, { Key: { roleId: 'superadmin' } }).resolves({
+      Item: { roleId: 'superadmin', privileges: ['write:*:users'], tenantScope: 'global' },
+    })
+
+    const result = await handler(buildEvent())
+
+    const idClaims =
+      result.response.claimsAndScopeOverrideDetails.idTokenGeneration?.claimsToAddOrOverride
+    const accessClaims =
+      result.response.claimsAndScopeOverrideDetails.accessTokenGeneration?.claimsToAddOrOverride
+
+    // Held-but-inactive (elevated) privilege: on the ID token...
+    expect(idClaims?.scope).toContain('write:*:users')
+    // ...and never on the access token.
+    expect(accessClaims?.scope).not.toContain('write:*:users')
+    expect(accessClaims?.scope).toBe('read:acme-corp:users')
+
+    // The tenants claim is unaffected by activation state -- identical on both.
+    expect(idClaims?.tenants).toBe(accessClaims?.tenants)
+    expect(idClaims?.tenants).toBe('acme-corp')
   })
 
   it('space-joins the tenants claim for a user logged in on more than one tenant', async () => {

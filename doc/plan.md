@@ -172,10 +172,10 @@ expected issuer is configuration, not a constant").
 
 ### 5. Split ID and access token claims — Sonnet / **Opus (security-critical)**
 
-- [ ] `pre-token-generation` resolves twice: the full held-plus-active set for
+- [x] `pre-token-generation` resolves twice: the full held-plus-active set for
       the ID token, the active-only set for the access token. It already runs
       on the V2 event, which supports diverging the two.
-- [ ] Test that a held-but-inactive privilege appears on the ID token and
+- [x] Test that a held-but-inactive privilege appears on the ID token and
       **never** on the access token.
 
 ### 6. RP handoff: `/authorize` + `/token` — Sonnet / **Opus (security-critical)**
@@ -708,3 +708,28 @@ done alongside what was.
   back to drop it, so every change onto that branch from here on has its
   own reviewable PR. `feature/cognito-auth-module` (PR #133) itself stays
   open/unmerged until this whole line of work is done, per rlc.
+
+- **2026-09-12** — Step 5 (split ID and access token claims,
+  **security-critical**). `resolvePrivilegesForUser`'s single privilege set
+  became two: `idTokenPrivileges` (held-plus-active -- every role the user
+  holds, `default` and `elevated` alike) and `accessTokenPrivileges`
+  (active-only -- just `default`-activation roles, exactly today's
+  pre-split behavior). Both are derived from **one** batched
+  `getRoleDefinition` fetch over every held role, not two -- fetching the
+  full superset once and filtering the access-token subset from it, since
+  doubling DynamoDB round-trips inside the synchronous, timeout-sensitive
+  Cognito pre-token-generation trigger would undo the exact batching
+  `resolvePrivilegesForUser` already existed to provide. `tenants` is
+  computed once and stays identical on both tokens -- it's an
+  authentication-scope concept, not an activation one, so it was never in
+  scope for this split. The optional pre-token-generation hook (external,
+  vendored, contract predates the split) now receives the access-token
+  (active-only) set under its existing `privileges` key -- the narrower,
+  more conservative choice for a hook reacting to "what can this session do
+  right now."
+
+  Implemented by a clean-context agent (no memory of this session) from a
+  self-contained brief; I reviewed the diff directly, independently
+  re-ran the full verification suite myself rather than trusting its
+  report, then handled `plan.md` and the PR. This is the first step done
+  under that split going forward, per rlc.
