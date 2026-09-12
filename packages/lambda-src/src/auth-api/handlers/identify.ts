@@ -1,7 +1,9 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import {
+  assertRegisteredRedirectUri,
   resolveIdentityProviderForDomain,
   resolveTenantIdForClient,
+  UnregisteredRedirectUriError,
   type ResolveTenantIdForClientConfig,
 } from '../../shared/tenants'
 import { signSession } from '../session'
@@ -69,6 +71,29 @@ export async function identify({
     tenantsTableName: config.tenantsTableName,
     ddbDocClient,
   })
+
+  // /authorize (handlers/authorize.ts) already validates redirect_uri
+  // against the calling client's registered allowlist -- but that check
+  // must not be the *only* place it happens: a caller can reach /identify
+  // directly, skipping /authorize entirely, and inject an arbitrary
+  // redirect_uri that /password would later 302 to unchecked. Re-derive and
+  // re-check here independently (same defense-in-depth posture as
+  // admin-api/authz.ts's per-handler tenant checks) rather than trust that
+  // whatever called this already went through /authorize.
+  if (redirectUri !== undefined) {
+    // Without a client_id, there is no registered allowlist to check
+    // against at all -- and no RP handoff can have started without one,
+    // since /authorize always requires it. Without a code_challenge, a
+    // /password step later couldn't complete PKCE either. Either gap means
+    // this isn't a genuine RP-handoff request; refuse to carry the
+    // redirect_uri forward rather than guess what the caller meant.
+    if (!clientId || !codeChallenge) {
+      throw new UnregisteredRedirectUriError(
+        'redirect_uri requires both a client_id and a code_challenge.',
+      )
+    }
+    await assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient)
+  }
 
   // Only defined when actually provided, so an ordinary direct-login call
   // (none of these three present) produces exactly the same session payload

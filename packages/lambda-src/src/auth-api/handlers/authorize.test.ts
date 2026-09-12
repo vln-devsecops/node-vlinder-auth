@@ -1,10 +1,10 @@
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { UnknownClientError } from '../../shared/tenants'
+import { UnknownClientError, UnregisteredRedirectUriError } from '../../shared/tenants'
 import {
   authorize,
-  UnregisteredRedirectUriError,
+  InvalidAuthorizeRequestError,
   UnsupportedCodeChallengeMethodError,
   UnsupportedResponseTypeError,
 } from './authorize'
@@ -80,5 +80,23 @@ describe('authorize', () => {
     await expect(authorize(params({ codeChallengeMethod: 'plain' }))).rejects.toThrow(
       UnsupportedCodeChallengeMethodError,
     )
+  })
+
+  it('rejects a missing client_id before touching the database', async () => {
+    await expect(authorize(params({ clientId: '' }))).rejects.toThrow(InvalidAuthorizeRequestError)
+    expect(ddbMock.calls()).toHaveLength(0)
+  })
+
+  it('rejects a missing redirect_uri before touching the database', async () => {
+    await expect(authorize(params({ redirectUri: '' }))).rejects.toThrow(InvalidAuthorizeRequestError)
+    expect(ddbMock.calls()).toHaveLength(0)
+  })
+
+  it('rejects a missing code_challenge before touching the database', async () => {
+    // The gap this closes: an empty code_challenge would otherwise sail
+    // through every other check and only surface later as a confusing
+    // silent fallback to the direct-login response at /password.
+    await expect(authorize(params({ codeChallenge: '' }))).rejects.toThrow(InvalidAuthorizeRequestError)
+    expect(ddbMock.calls()).toHaveLength(0)
   })
 })

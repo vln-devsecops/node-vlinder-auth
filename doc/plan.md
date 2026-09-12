@@ -792,3 +792,29 @@ done alongside what was.
   independently re-ran verification myself before proceeding. The
   terraform-modules registry/secret extension I wrote directly, matching
   the exact contracts the agent's lambda-src code expects.
+
+  An Opus review pass on the resulting PR caught a real bug my own review
+  missed: `/authorize` validates `redirect_uri` against the client's
+  registered allowlist, but nothing stopped a caller from reaching
+  `/identify` **directly**, skipping `/authorize` entirely, and embedding
+  an arbitrary unregistered `redirect_uri` straight into the signed
+  identify-session -- `/password` would then 302 the browser to it
+  unchecked once login succeeded, an open redirect (and token leak, since
+  the one-time token rides in that URL) from the trusted auth domain. Fixed
+  by centralizing the allowlist check as `shared/tenants.ts`'s new
+  `assertRegisteredRedirectUri` and calling it from **both** `/authorize`
+  and `/identify` -- the same defense-in-depth posture `admin-api/authz.ts`
+  already uses elsewhere in this codebase (each handler independently
+  re-derives and re-checks, never trusting that an earlier step already
+  checked). `/identify` also now requires `client_id` and `code_challenge`
+  whenever a `redirect_uri` is present, rather than silently proceeding
+  with a partial, unverifiable RP-handoff context. Also caught: `/authorize`
+  never rejected an empty `code_challenge`, which would previously sail
+  through every check and only surface later as a confusing silent
+  fallback to the direct-login response at `/password` -- fixed with an
+  explicit required-fields check before any DB round-trip. A pre-existing,
+  unrelated test-flakiness bug was also found and fixed while re-verifying
+  (`token.test.ts`'s tamper test flipped the last base64url character,
+  which can land on padding bits that don't change the decoded bytes --
+  `oneTimeToken.test.ts`'s identical test already avoided this correctly;
+  `token.test.ts`'s copy hadn't).

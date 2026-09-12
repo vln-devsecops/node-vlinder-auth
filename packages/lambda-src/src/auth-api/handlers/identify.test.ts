@@ -1,7 +1,7 @@
 import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { UnknownClientError } from '../../shared/tenants'
+import { UnknownClientError, UnregisteredRedirectUriError } from '../../shared/tenants'
 import { verifySession } from '../session'
 import { identify, InvalidIdentifierError } from './identify'
 
@@ -103,10 +103,20 @@ describe('identify', () => {
     expect(payload).toMatchObject({ method: 'redirect', tenantId: 'acme-corp', provider: 'okta-acme' })
   })
 
-  it('threads redirect_uri, code_challenge and state from an /authorize-originated call into the identify session', async () => {
+  it('threads redirect_uri, code_challenge and state from an /authorize-originated call into the identify session, after re-validating the redirect_uri', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          tenantId: 'acme-corp',
+          clientId: 'client-abc',
+          redirectUris: ['https://app.example.com/login/callback'],
+        },
+      ],
+    })
+
     const result = await identify({
       identifier: 'jane@example.com',
-      clientId: undefined,
+      clientId: 'client-abc',
       signingKey: KEY,
       config,
       ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
@@ -122,5 +132,64 @@ describe('identify', () => {
       codeChallenge: 'test-code-challenge',
       state: 'rp-state-value',
     })
+  })
+
+  it('rejects a redirect_uri not registered for the given client_id -- the open-redirect guard also applies here, not just at /authorize', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { tenantId: 'acme-corp', clientId: 'client-abc', redirectUris: ['https://app.example.com/callback'] },
+      ],
+    })
+
+    await expect(
+      identify({
+        identifier: 'jane@example.com',
+        clientId: 'client-abc',
+        signingKey: KEY,
+        config,
+        ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+        redirectUri: 'https://evil.example.com/phish',
+        codeChallenge: 'test-code-challenge',
+      }),
+    ).rejects.toThrow(UnregisteredRedirectUriError)
+  })
+
+  it('rejects a redirect_uri sent with no client_id -- an RP handoff cannot start without one', async () => {
+    // The bug this closes: calling /identify directly (skipping /authorize
+    // entirely) with a redirect_uri and no client_id used to sail through
+    // unchecked, since resolveTenantIdForClient treats an absent client_id
+    // as "the auth app's own tenant", not an error -- letting an attacker
+    // embed an arbitrary open-redirect target into a signed session that
+    // /password would later 302 to.
+    await expect(
+      identify({
+        identifier: 'jane@example.com',
+        clientId: undefined,
+        signingKey: KEY,
+        config,
+        ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+        redirectUri: 'https://evil.example.com/phish',
+        codeChallenge: 'test-code-challenge',
+      }),
+    ).rejects.toThrow(UnregisteredRedirectUriError)
+  })
+
+  it('rejects a redirect_uri sent with no code_challenge', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { tenantId: 'acme-corp', clientId: 'client-abc', redirectUris: ['https://app.example.com/callback'] },
+      ],
+    })
+
+    await expect(
+      identify({
+        identifier: 'jane@example.com',
+        clientId: 'client-abc',
+        signingKey: KEY,
+        config,
+        ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+        redirectUri: 'https://app.example.com/callback',
+      }),
+    ).rejects.toThrow(UnregisteredRedirectUriError)
   })
 })

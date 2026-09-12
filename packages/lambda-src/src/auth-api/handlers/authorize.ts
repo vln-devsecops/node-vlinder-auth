@@ -1,6 +1,6 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import {
-  resolveClientRedirectUris,
+  assertRegisteredRedirectUri,
   resolveTenantIdForClient,
   type ResolveTenantIdForClientConfig,
 } from '../../shared/tenants'
@@ -42,18 +42,25 @@ export async function authorize(params: AuthorizeParams): Promise<AuthorizeResul
   const { clientId, redirectUri, responseType, codeChallenge, codeChallengeMethod, state, config, ddbDocClient } =
     params
 
+  // 0. client_id, redirect_uri and code_challenge are all required -- fail
+  // fast on a malformed request before any DB round-trip. Without this, an
+  // empty code_challenge would sail through every other check here and only
+  // surface later as a confusing silent fallback at /password (which treats
+  // a missing codeChallenge as "not an RP handoff at all"). state is
+  // genuinely optional (RFC 6749's own posture: RECOMMENDED, not REQUIRED).
+  if (!clientId || !redirectUri || !codeChallenge) {
+    throw new InvalidAuthorizeRequestError(
+      'client_id, redirect_uri and code_challenge are all required',
+    )
+  }
+
   // 1. client_id -> tenant. Throws UnknownClientError for an unregistered client.
   await resolveTenantIdForClient({ clientId, config, ddbDocClient })
 
   // 2. redirect_uri must be an exact-string match in that client's registered
   // allowlist -- no prefix/wildcard matching, no query-string-insensitive
   // comparison. This is the open-redirect guard.
-  const redirectUris = await resolveClientRedirectUris(clientId, config, ddbDocClient)
-  if (!redirectUris.includes(redirectUri)) {
-    throw new UnregisteredRedirectUriError(
-      `redirect_uri is not registered for client_id ${clientId}`,
-    )
-  }
+  await assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient)
 
   // 3. Only the authorization_code flow is supported.
   if (responseType !== 'code') {
@@ -79,6 +86,7 @@ export async function authorize(params: AuthorizeParams): Promise<AuthorizeResul
   return { location: `/?${query.toString()}` }
 }
 
-export class UnregisteredRedirectUriError extends Error {}
+export class InvalidAuthorizeRequestError extends Error {}
 export class UnsupportedResponseTypeError extends Error {}
 export class UnsupportedCodeChallengeMethodError extends Error {}
+export { UnregisteredRedirectUriError } from '../../shared/tenants'

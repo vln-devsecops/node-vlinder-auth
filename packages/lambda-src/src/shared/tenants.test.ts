@@ -2,11 +2,13 @@ import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-d
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  assertRegisteredRedirectUri,
   resolveClientRedirectUris,
   resolveIdentityProviderForDomain,
   resolveTenantForNewUser,
   resolveTenantIdForClient,
   UnknownClientError,
+  UnregisteredRedirectUriError,
 } from './tenants'
 
 const ddbMock = mockClient(DynamoDBDocumentClient)
@@ -154,6 +156,64 @@ describe('resolveClientRedirectUris', () => {
     await expect(
       resolveClientRedirectUris(
         'someone-elses-client',
+        { tenantsTableName: 'tenants-table' },
+        ddbMock as unknown as DynamoDBDocumentClient,
+      ),
+    ).rejects.toThrow(UnknownClientError)
+  })
+})
+
+describe('assertRegisteredRedirectUri', () => {
+  it('resolves without throwing for an exact-match registered redirect_uri', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ tenantId: 'acme-corp', clientId: 'client-abc', redirectUris: ['https://app.example.com/callback'] }],
+    })
+
+    await expect(
+      assertRegisteredRedirectUri(
+        'client-abc',
+        'https://app.example.com/callback',
+        { tenantsTableName: 'tenants-table' },
+        ddbMock as unknown as DynamoDBDocumentClient,
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  it('throws UnregisteredRedirectUriError for a redirect_uri not in the allowlist -- the open-redirect guard', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ tenantId: 'acme-corp', clientId: 'client-abc', redirectUris: ['https://app.example.com/callback'] }],
+    })
+
+    await expect(
+      assertRegisteredRedirectUri(
+        'client-abc',
+        'https://evil.example.com/phish',
+        { tenantsTableName: 'tenants-table' },
+        ddbMock as unknown as DynamoDBDocumentClient,
+      ),
+    ).rejects.toThrow(UnregisteredRedirectUriError)
+  })
+
+  it('throws UnregisteredRedirectUriError (never silently passes) when the client has an empty allowlist', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [{ tenantId: 'acme-corp', clientId: 'client-abc' }] })
+
+    await expect(
+      assertRegisteredRedirectUri(
+        'client-abc',
+        'https://app.example.com/callback',
+        { tenantsTableName: 'tenants-table' },
+        ddbMock as unknown as DynamoDBDocumentClient,
+      ),
+    ).rejects.toThrow(UnregisteredRedirectUriError)
+  })
+
+  it('propagates UnknownClientError for an unregistered client_id', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] })
+
+    await expect(
+      assertRegisteredRedirectUri(
+        'someone-elses-client',
+        'https://app.example.com/callback',
         { tenantsTableName: 'tenants-table' },
         ddbMock as unknown as DynamoDBDocumentClient,
       ),

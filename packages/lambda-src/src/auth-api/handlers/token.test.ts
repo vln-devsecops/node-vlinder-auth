@@ -49,7 +49,12 @@ describe('exchangeToken', () => {
   it('rejects a tampered one-time token', async () => {
     const token = await oneTimeTokenFor()
     const parts = token.split('.')
-    const tamperedCiphertext = parts[3].slice(0, -1) + (parts[3].slice(-1) === 'A' ? 'B' : 'A')
+    // Flip the first character, not the last: in base64url the last
+    // character can land on padding bits that don't change the decoded
+    // bytes, which would make this test flaky (see oneTimeToken.test.ts's
+    // identical tamper test).
+    const ciphertext = parts[3]
+    const tamperedCiphertext = (ciphertext[0] === 'A' ? 'B' : 'A') + ciphertext.slice(1)
     const tampered = [parts[0], parts[1], parts[2], tamperedCiphertext, parts[4]].join('.')
 
     await expect(exchangeToken({ token: tampered, codeVerifier: CODE_VERIFIER, key: KEY })).rejects.toThrow(
