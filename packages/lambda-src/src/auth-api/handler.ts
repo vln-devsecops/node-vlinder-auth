@@ -4,7 +4,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
 import { getDdbDocClient } from '../shared/ddb-client'
-import { getSecret } from '../shared/secrets'
+import { getSecret, getSecretVersion } from '../shared/secrets'
 import { getSesClient } from '../shared/ses-client'
 import { UnknownClientError } from '../shared/tenants'
 import {
@@ -25,6 +25,7 @@ import { confirmSignUp, resendConfirmation, signUp } from './handlers/registrati
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
 import { exchangeToken, InvalidOneTimeTokenError, PkceMismatchError } from './handlers/token'
 import { CognitoClientError } from './cognitoError'
+import type { OneTimeTokenKey } from './oneTimeToken'
 import { InvalidVerificationCodeError } from './verificationCodeError'
 import {
   AS_SESSION_COOKIE,
@@ -88,7 +89,15 @@ interface RouteDeps {
   verificationCodeTtlSeconds: number
   verificationCodeMaxAttempts: number
   fromAddress: string
-  oneTimeTokenKey: string
+  /** Current key only -- for /password's minting (see handlers/password.ts). */
+  oneTimeTokenKey: OneTimeTokenKey
+  /**
+   * Current key plus the previous one, if Secrets Manager still has it under
+   * AWSPREVIOUS -- for /token's verification, to cover a token minted just
+   * before a rotation and exchanged just after (see oneTimeToken.ts's
+   * verifyOneTimeToken and handlers/token.ts).
+   */
+  oneTimeTokenKeys: OneTimeTokenKey[]
 }
 
 /** Maps a handler-thrown error to its HTTP response, or returns undefined to re-throw. */
@@ -152,6 +161,7 @@ async function routeRequest(
     verificationCodeMaxAttempts,
     fromAddress,
     oneTimeTokenKey,
+    oneTimeTokenKeys,
   } = deps
 
   switch (event.routeKey) {
@@ -339,7 +349,7 @@ async function routeRequest(
       const result = await exchangeToken({
         token: bodyString(body.token),
         codeVerifier: bodyString(body.code_verifier),
-        key: oneTimeTokenKey,
+        keys: oneTimeTokenKeys,
       })
       return json(200, result)
     }
@@ -360,6 +370,29 @@ async function routeRequest(
 export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
+  // Fetched as explicit version stages (not via getSecret's plain
+  // cache-by-secretId) because /token's verification must be able to try
+  // both the key that is AWSCURRENT right now and the one that was AWSCURRENT
+  // a moment ago (AWSPREVIOUS) -- see oneTimeToken.ts's verifyOneTimeToken.
+  // AWSPREVIOUS may not exist yet on a secret that has never been rotated,
+  // which getSecretVersion signals with undefined rather than an error.
+  const oneTimeTokenSecretId = requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID')
+  const oneTimeTokenCurrent = await getSecretVersion(oneTimeTokenSecretId, 'AWSCURRENT')
+  if (!oneTimeTokenCurrent) {
+    throw new Error(`Secret ${oneTimeTokenSecretId} has no AWSCURRENT version`)
+  }
+  const oneTimeTokenPrevious = await getSecretVersion(oneTimeTokenSecretId, 'AWSPREVIOUS')
+  const oneTimeTokenKey: OneTimeTokenKey = {
+    keyId: oneTimeTokenCurrent.versionId,
+    key: oneTimeTokenCurrent.value,
+  }
+  const oneTimeTokenKeys: OneTimeTokenKey[] = [
+    oneTimeTokenKey,
+    ...(oneTimeTokenPrevious
+      ? [{ keyId: oneTimeTokenPrevious.versionId, key: oneTimeTokenPrevious.value }]
+      : []),
+  ]
+
   const deps: RouteDeps = {
     signingKey: await getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID')),
     cognitoClient: getCognitoClient(),
@@ -373,7 +406,8 @@ export async function handler(
     verificationCodeTtlSeconds: Number(requireEnv('VERIFICATION_CODE_TTL_SECONDS')),
     verificationCodeMaxAttempts: Number(requireEnv('VERIFICATION_CODE_MAX_ATTEMPTS')),
     fromAddress: requireEnv('SES_FROM_ADDRESS'),
-    oneTimeTokenKey: await getSecret(requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID')),
+    oneTimeTokenKey,
+    oneTimeTokenKeys,
   }
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 

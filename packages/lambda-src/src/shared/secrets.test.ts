@@ -1,7 +1,11 @@
-import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
+import {
+  GetSecretValueCommand,
+  ResourceNotFoundException,
+  SecretsManagerClient,
+} from '@aws-sdk/client-secrets-manager'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { getSecret } from './secrets'
+import { getSecret, getSecretVersion } from './secrets'
 
 const secretsManagerMock = mockClient(SecretsManagerClient)
 
@@ -42,5 +46,76 @@ describe('getSecret', () => {
     secretsManagerMock.on(GetSecretValueCommand).resolves({ SecretBinary: new Uint8Array() })
 
     await expect(getSecret('binary-only-test')).rejects.toThrow(/SecretString/)
+  })
+})
+
+describe('getSecretVersion', () => {
+  it('fetches the AWSCURRENT version, returning both the value and versionId', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .resolves({ SecretString: 'current-value', VersionId: 'version-current' })
+
+    const result = await getSecretVersion('one-time-token-secret', 'AWSCURRENT')
+
+    expect(result).toEqual({ value: 'current-value', versionId: 'version-current' })
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand)[0].args[0].input).toMatchObject({
+      SecretId: 'one-time-token-secret',
+      VersionStage: 'AWSCURRENT',
+    })
+  })
+
+  it('fetches the AWSPREVIOUS version, returning both the value and versionId', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSPREVIOUS' })
+      .resolves({ SecretString: 'previous-value', VersionId: 'version-previous' })
+
+    const result = await getSecretVersion('one-time-token-secret', 'AWSPREVIOUS')
+
+    expect(result).toEqual({ value: 'previous-value', versionId: 'version-previous' })
+  })
+
+  it('throws when the version has no SecretString value', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .resolves({ VersionId: 'version-current', SecretBinary: new Uint8Array() })
+
+    await expect(getSecretVersion('one-time-token-secret', 'AWSCURRENT')).rejects.toThrow(/SecretString/)
+  })
+
+  it('throws when the version has no VersionId', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .resolves({ SecretString: 'current-value' })
+
+    await expect(getSecretVersion('one-time-token-secret', 'AWSCURRENT')).rejects.toThrow(/VersionId/)
+  })
+
+  it('returns undefined when the version stage does not exist yet (e.g. a never-rotated secret has no AWSPREVIOUS)', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSPREVIOUS' })
+      .rejects(new ResourceNotFoundException({ message: 'not found', $metadata: {} }))
+
+    const result = await getSecretVersion('one-time-token-secret', 'AWSPREVIOUS')
+
+    expect(result).toBeUndefined()
+  })
+
+  it('propagates other SDK errors rather than swallowing them as undefined', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSPREVIOUS' })
+      .rejects(new Error('access denied'))
+
+    await expect(getSecretVersion('one-time-token-secret', 'AWSPREVIOUS')).rejects.toThrow('access denied')
+  })
+
+  it('is uncached: back-to-back calls for the same secretId/stage both hit the SDK', async () => {
+    secretsManagerMock
+      .on(GetSecretValueCommand, { VersionStage: 'AWSCURRENT' })
+      .resolves({ SecretString: 'current-value', VersionId: 'version-current' })
+
+    await getSecretVersion('one-time-token-secret', 'AWSCURRENT')
+    await getSecretVersion('one-time-token-secret', 'AWSCURRENT')
+
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand)).toHaveLength(2)
   })
 })

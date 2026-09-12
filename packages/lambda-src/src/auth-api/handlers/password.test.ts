@@ -7,13 +7,14 @@ import {
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { verifyOneTimeToken } from '../oneTimeToken'
+import { type OneTimeTokenKey, verifyOneTimeToken } from '../oneTimeToken'
 import { signSession } from '../session'
 import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './password'
 
 const KEY = 'test-signing-key-000000000000000000000000'
 // Exactly 32 bytes when UTF-8 encoded, as A256GCM's dir mode requires.
-const ONE_TIME_TOKEN_KEY = '01234567890123456789012345678901'.slice(0, 32)
+const ONE_TIME_TOKEN_KEY_MATERIAL = '01234567890123456789012345678901'.slice(0, 32)
+const ONE_TIME_TOKEN_KEY: OneTimeTokenKey = { keyId: 'test-key-id', key: ONE_TIME_TOKEN_KEY_MATERIAL }
 const cognitoMock = mockClient(CognitoIdentityProviderClient)
 const ddbMock = mockClient(DynamoDBDocumentClient)
 
@@ -175,7 +176,7 @@ describe('password', () => {
     expect(location.searchParams.get('state')).toBe('rp-state-value')
 
     const token = location.searchParams.get('token')!
-    const payload = await verifyOneTimeToken(token, ONE_TIME_TOKEN_KEY, issuedAt)
+    const payload = await verifyOneTimeToken(token, [ONE_TIME_TOKEN_KEY], issuedAt)
     expect(payload).toMatchObject({
       userId: 'jane@example.com',
       redirectUri: 'https://app.example.com/login/callback',

@@ -1,5 +1,5 @@
 import { verifyCodeChallenge } from '../pkce'
-import { verifyOneTimeToken } from '../oneTimeToken'
+import { type OneTimeTokenKey, verifyOneTimeToken } from '../oneTimeToken'
 
 // The RP handoff's final step (see doc/vendor-neutral-auth.md's "Login"
 // sequence diagram): the RP's back-end exchanges the one-time token it
@@ -12,7 +12,16 @@ import { verifyOneTimeToken } from '../oneTimeToken'
 export interface TokenExchangeParams {
   token: string
   codeVerifier: string
-  key: string
+  /**
+   * Candidate keys to try when decrypting the one-time token, in order --
+   * in practice the current Secrets Manager version followed by the
+   * previous one, if it exists (see handler.ts). More than one candidate is
+   * needed here (but never for minting in password.ts) to cover a token
+   * minted right before a key rotation and exchanged just after: its 60s TTL
+   * makes this a narrow window, but a real one given Secrets Manager's
+   * immediate-overwrite rotation.
+   */
+  keys: OneTimeTokenKey[]
   now?: number
 }
 
@@ -24,9 +33,9 @@ export type TokenExchangeResult = {
 }
 
 export async function exchangeToken(params: TokenExchangeParams): Promise<TokenExchangeResult> {
-  const { token, codeVerifier, key, now } = params
+  const { token, codeVerifier, keys, now } = params
 
-  const payload = await verifyOneTimeToken(token, key, now)
+  const payload = await verifyOneTimeToken(token, keys, now)
   if (!payload) {
     throw new InvalidOneTimeTokenError('The one-time token is missing, invalid, tampered with, or has expired.')
   }

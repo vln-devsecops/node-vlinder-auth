@@ -849,3 +849,63 @@ done alongside what was.
   does, which would make it impossible to tell an open-redirect probe from
   an ordinary client integration bug from the error type alone -- split
   into its own `IncompleteRpHandoffContextError`.
+
+  rlc then asked two follow-ups to the one-time-token key, both implemented
+  on the same branches before merge:
+
+  1. **Rotation-boundary tolerance.** `oneTimeToken.ts`'s JWE now carries a
+     `kid` (the encrypting key's Secrets Manager version id, for operator
+     traceability -- not read back during verification, since GCM's own
+     auth tag already fails safely/cheaply on a wrong key and matching on
+     `kid` would just be one more piece of logic that could itself have a
+     bug). `verifyOneTimeToken` takes a list of candidate keys and tries
+     each in order; `shared/secrets.ts` gained `getSecretVersion` to fetch
+     `AWSCURRENT` and, if it exists yet, `AWSPREVIOUS` explicitly (returning
+     `undefined`, not an error, when a never-rotated secret has no
+     `AWSPREVIOUS`). Minting always uses the current key only. Caught in my
+     own review of the agent's diff before it ever reached Opus: the
+     per-candidate `try/catch` in `verifyOneTimeToken` also silently
+     swallowed `keyBytes`' loud "must be exactly 32 bytes" validation error,
+     which would have turned a misconfigured key into an indistinguishable
+     "wrong key" failure -- fixed by validating every candidate's length
+     up front, outside the per-candidate catch.
+  2. **Actual cron rotation, not just apply-time.** Both secrets previously
+     only rotated when someone ran `terraform apply` (`time_rotating` plus
+     a local-exec reseed) -- fine for this project, but not for an adopter
+     who might not redeploy for months. New `rotate-secret` Lambda
+     (`packages/lambda-src/src/rotate-secret/handler.ts`) generates a
+     replacement value via `GetRandomPassword` (flags matching the old
+     local-exec script exactly -- `--exclude-punctuation` keeps the result
+     all-ASCII, which is what makes `PasswordLength` equal byte length,
+     which matters for the one-time-token key's 32-byte requirement) and
+     writes it via `PutSecretValue`, which is itself what promotes the new
+     value to `AWSCURRENT` and demotes the old one to `AWSPREVIOUS` -- no
+     extra bookkeeping needed to feed `getSecretVersion` above. One handler
+     serves both secrets; which one, and what password length, arrives as
+     the event payload. In `terraform-modules` (new PR against
+     `feat/rp-handoff-registry-and-key`, stacking on the still-open PR
+     #282, since it needs that branch's `auth_one_time_token_key` resource):
+     removed the `time_rotating` resources entirely and narrowed the
+     `null_resource` seed steps to bootstrap-only (they still have to run
+     once, since a freshly-created secret has no value at all); added the
+     Lambda, its own IAM role/policy (`GetRandomPassword` needs
+     `Resource = ["*"]` -- it has no resource type of its own --
+     `PutSecretValue` scoped to exactly the two secrets), and two
+     `aws_scheduler_schedule` resources (`rate(30 days)` each, one per
+     secret, since a schedule models one target apiece) with their own
+     scheduler-assumed IAM role. `CKV_AWS_297` (CMK-encrypt the schedule)
+     skipped with reasoning: the schedule's own stored `input` is a secret
+     ARN and a password length, both already visible in the Terraform
+     plan/state regardless -- not the secret value itself, which stays
+     CMK-encrypted in Secrets Manager unaffected by this setting -- so
+     granting `scheduler.amazonaws.com` a KMS key-policy statement (a real,
+     only-apply-time-verifiable grant) wasn't worth the risk for data with
+     no confidentiality requirement.
+
+  Both follow-ups implemented the same way as the step: I designed and
+  confirmed the approach with rlc first (notably, whether to fix now vs.
+  track separately -- rlc chose now), a clean-context agent implemented
+  each piece from a fully-specified brief, and I reviewed the diff and
+  independently re-verified before proceeding -- catching the
+  `verifyOneTimeToken` key-length-validation gap above myself, before any
+  Opus pass.

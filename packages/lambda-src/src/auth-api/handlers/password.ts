@@ -6,7 +6,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { hasPendingCode } from '../../shared/verificationCodes'
-import { mintOneTimeToken } from '../oneTimeToken'
+import { mintOneTimeToken, type OneTimeTokenKey } from '../oneTimeToken'
 import { verifySession } from '../session'
 
 // Step 2 of the identifier-first flow: the user submits their password. The
@@ -47,8 +47,14 @@ export interface PasswordParams {
   signingKey: string
   ddbDocClient: DynamoDBDocumentClient
   verificationCodesTableName: string
-  /** Key for encrypting the RP-handoff one-time token (see oneTimeToken.ts). Required only on the redirect path below. */
-  oneTimeTokenKey: string
+  /**
+   * Key for encrypting the RP-handoff one-time token (see oneTimeToken.ts).
+   * Required only on the redirect path below. Always the current Secrets
+   * Manager version -- minting never needs to know about a "previous" key
+   * (that only matters to /token's verification, across a rotation
+   * boundary; see handlers/token.ts and handler.ts).
+   */
+  oneTimeTokenKey: OneTimeTokenKey
   now?: number
 }
 

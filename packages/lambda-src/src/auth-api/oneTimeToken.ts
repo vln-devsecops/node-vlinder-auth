@@ -25,6 +25,18 @@ export interface OneTimeTokenPayload {
   tokens: { accessToken: string; idToken: string; refreshToken: string; expiresAt: number }
 }
 
+export interface OneTimeTokenKey {
+  /**
+   * A stable identifier for this specific key value (the Secrets Manager
+   * version id) -- embedded as the JWE's `kid` for traceability across a
+   * rotation boundary (e.g. "which key version encrypted this one" when
+   * debugging a /token failure). Not used to select a key during
+   * verification -- see verifyOneTimeToken's doc comment.
+   */
+  keyId: string
+  key: string
+}
+
 /**
  * `dir`/A256GCM requires exactly 32 raw key bytes. `jose` throws its own
  * (fairly opaque) error if given the wrong length; this checks up front and
@@ -49,16 +61,16 @@ function keyBytes(key: string): Uint8Array {
  */
 export async function mintOneTimeToken(
   payload: OneTimeTokenPayload,
-  key: string,
+  key: OneTimeTokenKey,
   ttlSeconds: number,
   now: number = Date.now(),
 ): Promise<string> {
   const iat = Math.floor(now / 1000)
   return await new EncryptJWT(payload as unknown as JWTPayload)
-    .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
+    .setProtectedHeader({ alg: 'dir', enc: 'A256GCM', kid: key.keyId })
     .setIssuedAt(iat)
     .setExpirationTime(iat + ttlSeconds)
-    .encrypt(keyBytes(key))
+    .encrypt(keyBytes(key.key))
 }
 
 /**
@@ -68,16 +80,41 @@ export async function mintOneTimeToken(
  * session.ts's verifySession's exact null-on-any-failure contract, so callers
  * make their own decision about what "invalid" means for their own error
  * type rather than this function throwing. `now` (epoch ms) is injectable.
+ *
+ * Accepts a *list* of candidate keys (in practice: the current and, if it
+ * exists, the previous Secrets Manager version of the one-time-token key --
+ * see handler.ts) and tries each in order, returning the payload from the
+ * first that succeeds. This handles the narrow race where a token was minted
+ * with the key that was AWSCURRENT a moment ago, and the key has since
+ * rotated by the time /token verifies it.
+ *
+ * This deliberately does not read the token's own `kid` header to pick a
+ * single matching key to try. GCM's authentication tag already makes an
+ * attempt with the wrong key fail safely and cheaply, so there is no security
+ * or meaningful performance benefit to kid-matching -- and it would be one
+ * more piece of logic that could itself have a bug. The `kid` embedded by
+ * mintOneTimeToken exists purely for operator traceability/debugging (e.g.
+ * "which key version encrypted this one"), not as part of the verification
+ * algorithm.
  */
 export async function verifyOneTimeToken(
   token: string,
-  key: string,
+  candidateKeys: OneTimeTokenKey[],
   now: number = Date.now(),
 ): Promise<OneTimeTokenPayload | null> {
-  try {
-    const { payload } = await jwtDecrypt(token, keyBytes(key), { currentDate: new Date(now) })
-    return payload as unknown as OneTimeTokenPayload
-  } catch {
-    return null
+  // Validated up front, outside the try/catch below: a candidate's key being
+  // the wrong byte length is a misconfiguration (e.g. a bad secret value),
+  // not a decrypt failure, and must still fail loudly rather than be
+  // silently swallowed as "this candidate didn't match, try the next one."
+  const candidateKeyBytes = candidateKeys.map((candidate) => keyBytes(candidate.key))
+
+  for (const bytes of candidateKeyBytes) {
+    try {
+      const { payload } = await jwtDecrypt(token, bytes, { currentDate: new Date(now) })
+      return payload as unknown as OneTimeTokenPayload
+    } catch {
+      // Try the next candidate; only exhausting the whole list is failure.
+    }
   }
+  return null
 }

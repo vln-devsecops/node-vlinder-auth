@@ -7,7 +7,11 @@ import {
   SignUpCommand,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
+import {
+  GetSecretValueCommand,
+  ResourceNotFoundException,
+  SecretsManagerClient,
+} from '@aws-sdk/client-secrets-manager'
 import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2'
 import {
   DeleteCommand,
@@ -21,6 +25,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { handler } from './handler'
+import type { OneTimeTokenKey } from './oneTimeToken'
 import {
   AS_SESSION_COOKIE,
   AUTH_METHOD_COOKIE,
@@ -32,7 +37,14 @@ import {
 const KEY = 'test-signing-key-000000000000000000000000'
 // Exactly 32 bytes when UTF-8 encoded (32 ASCII characters), as A256GCM's dir
 // mode requires -- see oneTimeToken.ts's keyBytes().
-const ONE_TIME_TOKEN_KEY = 'test-one-time-token-key-32-bytes'.slice(0, 32)
+const ONE_TIME_TOKEN_KEY_MATERIAL = 'test-one-time-token-key-32-bytes'.slice(0, 32)
+const ONE_TIME_TOKEN_KEY: OneTimeTokenKey = {
+  keyId: 'version-current',
+  key: ONE_TIME_TOKEN_KEY_MATERIAL,
+}
+// A distinct 32-byte value standing in for the key that was AWSCURRENT
+// before the most recent rotation -- used by the rotation-boundary test.
+const PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL = 'test-previous-one-time-token-key'.slice(0, 32)
 const nowSeconds = Math.floor(Date.now() / 1000)
 const FUTURE_EXPIRY = nowSeconds + 600
 
@@ -48,7 +60,12 @@ beforeEach(() => {
   sesMock.reset()
   secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
     if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
-      return { SecretString: ONE_TIME_TOKEN_KEY }
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        return { SecretString: PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-previous' }
+      }
+      // No VersionStage (getSecret, used elsewhere) or AWSCURRENT both get
+      // the current value -- getSecret never passes VersionStage at all.
+      return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
     }
     return { SecretString: KEY }
   })
@@ -440,6 +457,116 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /api/v1/auth/token still exchanges a token minted with the AWSPREVIOUS key (rotation boundary)', async () => {
+    // Simulates the exact race the fix targets: this token was minted while
+    // the now-AWSPREVIOUS key was still AWSCURRENT, and is being exchanged
+    // after a rotation has since replaced AWSCURRENT.
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeVerifier = 'a-known-code-verifier-string'
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      { keyId: 'version-previous', key: PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL },
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: codeVerifier } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body!)).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: 123,
+    })
+  })
+
+  it('POST /api/v1/auth/token still works with only a current key when Secrets Manager has no AWSPREVIOUS yet (a fresh, never-rotated deployment)', async () => {
+    secretsManagerMock.reset()
+    secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+      if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
+        if (input.VersionStage === 'AWSPREVIOUS') {
+          throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+        }
+        return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
+      }
+      return { SecretString: KEY }
+    })
+
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeVerifier = 'a-known-code-verifier-string'
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      ONE_TIME_TOKEN_KEY,
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: codeVerifier } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body!)).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: 123,
+    })
+  })
+
+  it('POST /api/v1/auth/password still mints a working one-time token when Secrets Manager has no AWSPREVIOUS yet', async () => {
+    secretsManagerMock.reset()
+    secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+      if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
+        if (input.VersionStage === 'AWSPREVIOUS') {
+          throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+        }
+        return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
+      }
+      return { SecretString: KEY }
+    })
+    ddbMock.on(GetCommand).resolves({})
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+    const identifyToken = await signSession(
+      {
+        identifier: 'jane@x.com',
+        method: 'password',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge: 'test-code-challenge',
+        state: 'rp-state',
+      },
+      KEY,
+      300,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/password', {
+        body: { password: 'pw' },
+        cookies: [`${IDENTIFY_SESSION_COOKIE}=${identifyToken}`],
+      }),
+    )
+
+    expect(res.statusCode).toBe(302)
+    expect(res.headers!.location).toContain('https://app.example.com/login/callback?token=')
   })
 
   it('POST /api/v1/auth/password sets AUTH_METHOD_COOKIE=local and 302s to the RP when the identify session carries redirect_uri and code_challenge', async () => {
