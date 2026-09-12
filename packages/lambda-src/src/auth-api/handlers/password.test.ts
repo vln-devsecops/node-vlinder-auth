@@ -207,4 +207,32 @@ describe('password', () => {
     if (result.status !== 'redirect') return
     expect(result.location).not.toContain('state=')
   })
+
+  it('adds token/state as params rather than corrupting a redirect_uri that already has a query string', async () => {
+    // Regression: naive string concatenation (`${redirectUri}?token=...`)
+    // produced a second "?" for a redirect_uri like
+    // "https://app.example.com/callback?tenant=acme", merging "token" into
+    // the "tenant" param's value instead of adding a distinct one.
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+
+    const result = await password({
+      ...base,
+      identifySession: await identifySessionFor('jane@example.com', {
+        redirectUri: 'https://app.example.com/callback?tenant=acme',
+        codeChallenge: 'test-code-challenge',
+        state: 'rp-state-value',
+      }),
+      password: 'correct horse',
+    })
+
+    expect(result.status).toBe('redirect')
+    if (result.status !== 'redirect') return
+
+    const location = new URL(result.location)
+    expect(location.searchParams.get('tenant')).toBe('acme')
+    expect(location.searchParams.get('token')).not.toBeNull()
+    expect(location.searchParams.get('state')).toBe('rp-state-value')
+  })
 })

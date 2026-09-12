@@ -146,11 +146,20 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
       now,
     )
     const state = claims.state
-    const stateSegment = typeof state === 'string' && state ? `&state=${encodeURIComponent(state)}` : ''
+    // Built via the URL API, not string concatenation: a registered
+    // redirect_uri is free to already carry its own query string (e.g.
+    // `https://app.example.com/callback?tenant=acme`), and naively
+    // appending `?token=...` would produce a second `?`, corrupting it
+    // into a single malformed query string instead of adding a parameter.
+    const location = new URL(redirectUri)
+    location.searchParams.set('token', oneTimeToken)
+    if (typeof state === 'string' && state) {
+      location.searchParams.set('state', state)
+    }
     return {
       status: 'redirect',
       username,
-      location: `${redirectUri}?token=${encodeURIComponent(oneTimeToken)}${stateSegment}`,
+      location: location.toString(),
       // Also handed back (not just embedded in the one-time token) so the
       // handler can still set the same AS_SESSION_COOKIE it sets on the
       // direct-login path -- the SSO story (this browser has an AS session)

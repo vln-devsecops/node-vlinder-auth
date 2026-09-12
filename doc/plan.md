@@ -818,3 +818,16 @@ done alongside what was.
   which can land on padding bits that don't change the decoded bytes --
   `oneTimeToken.test.ts`'s identical test already avoided this correctly;
   `token.test.ts`'s copy hadn't).
+
+  A second Opus pass on the fix caught three more: the new
+  `InvalidAuthorizeRequestError` (added by the fix above) was never wired
+  into `errorResponse()`, so a missing required field at `/authorize` fell
+  through to an unhandled 500 instead of the intended 400 -- added. The
+  RP-handoff redirect built its final URL by string-concatenating
+  `` `${redirectUri}?token=...` ``, which corrupts a registered
+  `redirect_uri` that already carries its own query string (e.g.
+  `?tenant=acme`) into one malformed string instead of adding a distinct
+  `token` param -- rebuilt via the `URL`/`URLSearchParams` API instead.
+  `/authorize`'s two independent DynamoDB lookups (client→tenant,
+  redirect_uri allowlist) were awaited sequentially for no reason -- neither
+  depends on the other's result -- switched to `Promise.all`.

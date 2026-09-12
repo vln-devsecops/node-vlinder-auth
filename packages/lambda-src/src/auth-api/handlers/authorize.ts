@@ -54,13 +54,16 @@ export async function authorize(params: AuthorizeParams): Promise<AuthorizeResul
     )
   }
 
-  // 1. client_id -> tenant. Throws UnknownClientError for an unregistered client.
-  await resolveTenantIdForClient({ clientId, config, ddbDocClient })
-
-  // 2. redirect_uri must be an exact-string match in that client's registered
-  // allowlist -- no prefix/wildcard matching, no query-string-insensitive
-  // comparison. This is the open-redirect guard.
-  await assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient)
+  // 1 & 2. client_id -> tenant (throws UnknownClientError for an
+  // unregistered client), and redirect_uri must be an exact-string match in
+  // that client's registered allowlist -- no prefix/wildcard matching, no
+  // query-string-insensitive comparison. This is the open-redirect guard.
+  // Independent of each other (neither uses the other's result), so run
+  // concurrently rather than paying two sequential DynamoDB round trips.
+  await Promise.all([
+    resolveTenantIdForClient({ clientId, config, ddbDocClient }),
+    assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient),
+  ])
 
   // 3. Only the authorization_code flow is supported.
   if (responseType !== 'code') {

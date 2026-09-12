@@ -9,6 +9,7 @@ import { getSesClient } from '../shared/ses-client'
 import { UnknownClientError } from '../shared/tenants'
 import {
   authorize,
+  InvalidAuthorizeRequestError,
   UnregisteredRedirectUriError,
   UnsupportedCodeChallengeMethodError,
   UnsupportedResponseTypeError,
@@ -106,6 +107,7 @@ function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | unde
     return json(400, { error: error.message })
   }
   if (
+    error instanceof InvalidAuthorizeRequestError ||
     error instanceof UnregisteredRedirectUriError ||
     error instanceof UnsupportedResponseTypeError ||
     error instanceof UnsupportedCodeChallengeMethodError

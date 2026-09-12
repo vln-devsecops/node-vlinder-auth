@@ -371,6 +371,26 @@ describe('auth-api handler', () => {
     expect(res.statusCode).toBe(400)
   })
 
+  it('GET /api/v1/auth/authorize 400s on a missing code_challenge, not a 500', async () => {
+    // Regression: InvalidAuthorizeRequestError wasn't mapped in
+    // errorResponse(), so this used to fall through to `throw error` and
+    // surface as an unhandled 500 instead of the intended 400.
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://app.example.com/login/callback',
+          response_type: 'code',
+          code_challenge: '',
+          code_challenge_method: 'S256',
+          state: 'rp-state',
+        },
+      }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
   it('POST /api/v1/auth/token exchanges a valid one-time token and code_verifier for the embedded tokens', async () => {
     const { createHash } = await import('node:crypto')
     const { mintOneTimeToken } = await import('./oneTimeToken')
