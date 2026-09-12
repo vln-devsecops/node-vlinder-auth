@@ -831,3 +831,21 @@ done alongside what was.
   `/authorize`'s two independent DynamoDB lookups (client→tenant,
   redirect_uri allowlist) were awaited sequentially for no reason -- neither
   depends on the other's result -- switched to `Promise.all`.
+
+  A third Opus pass on that fix caught it had traded one redundancy for
+  another: `resolveTenantIdForClient`'s result (`tenantId`) was computed
+  and discarded in `authorize.ts` -- it exists purely for its
+  `UnknownClientError` side effect, which `assertRegisteredRedirectUri`
+  already throws itself via the same `clientId-index` query. Removed the
+  call entirely (no `Promise.all` needed either, once there's only one
+  lookup) rather than keep parallelizing two calls where one was always
+  unnecessary; `/authorize` never needed a tenant at all, since `/identify`
+  re-resolves it independently. Also caught: the two cookies on the
+  RP-handoff redirect path computed `maxAgeSeconds` via two separate
+  `Date.now()` calls that could drift apart by a beat under load for no
+  reason -- computed once, reused for both. And: the "redirect_uri present
+  without a client_id/code_challenge" case in `/identify` was throwing the
+  same `UnregisteredRedirectUriError` the real allowlist-mismatch case
+  does, which would make it impossible to tell an open-redirect probe from
+  an ordinary client integration bug from the error type alone -- split
+  into its own `IncompleteRpHandoffContextError`.

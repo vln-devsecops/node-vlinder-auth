@@ -1,9 +1,5 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
-import {
-  assertRegisteredRedirectUri,
-  resolveTenantIdForClient,
-  type ResolveTenantIdForClientConfig,
-} from '../../shared/tenants'
+import { assertRegisteredRedirectUri } from '../../shared/tenants'
 
 // The RP handoff's entry point (see doc/vendor-neutral-auth.md's "Login"
 // sequence diagram): an RP's back-end 302s its front-end here with the
@@ -30,7 +26,7 @@ export interface AuthorizeParams {
   codeChallenge: string
   codeChallengeMethod: string
   state: string
-  config: ResolveTenantIdForClientConfig
+  config: { tenantsTableName: string }
   ddbDocClient: DynamoDBDocumentClient
 }
 
@@ -54,23 +50,22 @@ export async function authorize(params: AuthorizeParams): Promise<AuthorizeResul
     )
   }
 
-  // 1 & 2. client_id -> tenant (throws UnknownClientError for an
-  // unregistered client), and redirect_uri must be an exact-string match in
-  // that client's registered allowlist -- no prefix/wildcard matching, no
+  // 1. redirect_uri must be an exact-string match in that client's
+  // registered allowlist -- no prefix/wildcard matching, no
   // query-string-insensitive comparison. This is the open-redirect guard.
-  // Independent of each other (neither uses the other's result), so run
-  // concurrently rather than paying two sequential DynamoDB round trips.
-  await Promise.all([
-    resolveTenantIdForClient({ clientId, config, ddbDocClient }),
-    assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient),
-  ])
+  // Also throws UnknownClientError for an unregistered client_id -- there's
+  // no separate client_id -> tenant lookup here (tenant isn't needed by
+  // this endpoint at all; /identify re-resolves it independently), so
+  // don't add one just to duplicate the same existence check this already
+  // makes via the same clientId-index GSI.
+  await assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient)
 
-  // 3. Only the authorization_code flow is supported.
+  // 2. Only the authorization_code flow is supported.
   if (responseType !== 'code') {
     throw new UnsupportedResponseTypeError(`Unsupported response_type: ${responseType}`)
   }
 
-  // 4. Only PKCE's S256 method is supported -- plain (unhashed) PKCE is
+  // 3. Only PKCE's S256 method is supported -- plain (unhashed) PKCE is
   // deliberately not offered (see pkce.ts).
   if (codeChallengeMethod !== 'S256') {
     throw new UnsupportedCodeChallengeMethodError(

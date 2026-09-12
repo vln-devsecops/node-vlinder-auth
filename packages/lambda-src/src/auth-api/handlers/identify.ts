@@ -3,7 +3,6 @@ import {
   assertRegisteredRedirectUri,
   resolveIdentityProviderForDomain,
   resolveTenantIdForClient,
-  UnregisteredRedirectUriError,
   type ResolveTenantIdForClientConfig,
 } from '../../shared/tenants'
 import { signSession } from '../session'
@@ -86,9 +85,15 @@ export async function identify({
     // since /authorize always requires it. Without a code_challenge, a
     // /password step later couldn't complete PKCE either. Either gap means
     // this isn't a genuine RP-handoff request; refuse to carry the
-    // redirect_uri forward rather than guess what the caller meant.
+    // redirect_uri forward rather than guess what the caller meant. Its own
+    // error class, distinct from UnregisteredRedirectUriError: that one
+    // means "this redirect_uri was checked against the allowlist and
+    // rejected" (the open-redirect signal worth alerting on), which is a
+    // different failure than "the request didn't even have enough context
+    // to check" -- collapsing the two would make it impossible to tell an
+    // open-redirect probe from an ordinary client integration bug.
     if (!clientId || !codeChallenge) {
-      throw new UnregisteredRedirectUriError(
+      throw new IncompleteRpHandoffContextError(
         'redirect_uri requires both a client_id and a code_challenge.',
       )
     }
@@ -128,3 +133,4 @@ export async function identify({
 }
 
 export class InvalidIdentifierError extends Error {}
+export class IncompleteRpHandoffContextError extends Error {}

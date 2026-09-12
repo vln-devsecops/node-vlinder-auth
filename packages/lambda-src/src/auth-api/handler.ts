@@ -14,7 +14,12 @@ import {
   UnsupportedCodeChallengeMethodError,
   UnsupportedResponseTypeError,
 } from './handlers/authorize'
-import { identify, IDENTIFY_SESSION_TTL_SECONDS, InvalidIdentifierError } from './handlers/identify'
+import {
+  identify,
+  IDENTIFY_SESSION_TTL_SECONDS,
+  IncompleteRpHandoffContextError,
+  InvalidIdentifierError,
+} from './handlers/identify'
 import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './handlers/password'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
@@ -88,7 +93,7 @@ interface RouteDeps {
 
 /** Maps a handler-thrown error to its HTTP response, or returns undefined to re-throw. */
 function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | undefined {
-  if (error instanceof InvalidIdentifierError) {
+  if (error instanceof InvalidIdentifierError || error instanceof IncompleteRpHandoffContextError) {
     return json(400, { error: error.message })
   }
   if (error instanceof InvalidSessionError) {
@@ -198,14 +203,21 @@ async function routeRequest(
         // RP handoff completion: set the same AS session cookie as the direct
         // path below (so the SSO story holds regardless of which flow
         // established the session) plus the auth-method cookie, then send a
-        // real redirect back to the RP instead of a JSON body.
+        // real redirect back to the RP instead of a JSON body. Computed once
+        // and reused for both cookies -- two separate Date.now() calls could
+        // let them drift apart by a beat under load, for no reason: they
+        // describe the same session and should expire together.
+        const redirectMaxAgeSeconds = Math.max(
+          0,
+          Math.floor((result.tokens.expiresAt - Date.now()) / 1000),
+        )
         return redirect(result.location, [
           serializeSessionCookie(AS_SESSION_COOKIE, result.tokens.accessToken, {
-            maxAgeSeconds: Math.max(0, Math.floor((result.tokens.expiresAt - Date.now()) / 1000)),
+            maxAgeSeconds: redirectMaxAgeSeconds,
             path: '/',
           }),
           serializeSessionCookie(AUTH_METHOD_COOKIE, 'local', {
-            maxAgeSeconds: Math.max(0, Math.floor((result.tokens.expiresAt - Date.now()) / 1000)),
+            maxAgeSeconds: redirectMaxAgeSeconds,
             path: '/',
           }),
         ])
@@ -315,7 +327,9 @@ async function routeRequest(
         // `scope` (also present per doc/vendor-neutral-auth.md's diagram) is
         // deliberately not read here -- see handlers/authorize.ts's doc
         // comment: it is accepted-and-ignored, never validated or forwarded.
-        config: { tenantsTableName, authAppTenantId },
+        // No authAppTenantId: /authorize never resolves a tenant itself
+        // (see authorize.ts) -- /identify does that independently.
+        config: { tenantsTableName },
         ddbDocClient,
       })
       return redirect(result.location)

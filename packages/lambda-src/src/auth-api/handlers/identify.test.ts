@@ -3,7 +3,7 @@ import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { UnknownClientError, UnregisteredRedirectUriError } from '../../shared/tenants'
 import { verifySession } from '../session'
-import { identify, InvalidIdentifierError } from './identify'
+import { identify, IncompleteRpHandoffContextError, InvalidIdentifierError } from './identify'
 
 const KEY = 'test-signing-key-000000000000000000000000'
 const ddbMock = mockClient(DynamoDBDocumentClient)
@@ -171,16 +171,22 @@ describe('identify', () => {
         redirectUri: 'https://evil.example.com/phish',
         codeChallenge: 'test-code-challenge',
       }),
-    ).rejects.toThrow(UnregisteredRedirectUriError)
+    ).rejects.toThrow(IncompleteRpHandoffContextError)
   })
 
-  it('rejects a redirect_uri sent with no code_challenge', async () => {
+  it('rejects a redirect_uri sent with no code_challenge, without even checking the allowlist', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [
         { tenantId: 'acme-corp', clientId: 'client-abc', redirectUris: ['https://app.example.com/callback'] },
       ],
     })
 
+    // A distinct error class from UnregisteredRedirectUriError -- this
+    // request never got far enough to check the allowlist at all (only one
+    // QueryCommand call: resolveTenantIdForClient's, not a second one from
+    // assertRegisteredRedirectUri), so it must not look like an
+    // open-redirect probe in whatever consumes these error types (e.g.
+    // alerting).
     await expect(
       identify({
         identifier: 'jane@example.com',
@@ -190,6 +196,7 @@ describe('identify', () => {
         ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
         redirectUri: 'https://app.example.com/callback',
       }),
-    ).rejects.toThrow(UnregisteredRedirectUriError)
+    ).rejects.toThrow(IncompleteRpHandoffContextError)
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1)
   })
 })
