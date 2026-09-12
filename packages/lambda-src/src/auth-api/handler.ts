@@ -4,7 +4,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
 import { getDdbDocClient } from '../shared/ddb-client'
-import { getSecret, getSecretVersions } from '../shared/secrets'
+import { getSecretVersion, getSecretVersions } from '../shared/secrets'
 import { getSesClient } from '../shared/ses-client'
 import { UnknownClientError } from '../shared/tenants'
 import {
@@ -171,8 +171,17 @@ async function routeRequest(
       const requestedClientId = bodyString(body.client_id) || undefined
       // Minting only ever needs the current key -- unlike verifying (see
       // /password below), there's no rotation-boundary case for a brand
-      // new session.
-      const signingKey = await getSecret(sessionSigningKeySecretId)
+      // new session. Fetched via the uncached getSecretVersion (not the
+      // forever-cached getSecret) specifically so a warm instance that
+      // outlives a rotation still signs with the real current key, not
+      // whatever was current the first time this instance touched it --
+      // otherwise sessions it mints would eventually fail every
+      // verifySession candidate on the /password side.
+      const currentSigningKey = await getSecretVersion(sessionSigningKeySecretId, 'AWSCURRENT')
+      if (!currentSigningKey) {
+        throw new Error(`Secret ${sessionSigningKeySecretId} has no AWSCURRENT version`)
+      }
+      const signingKey = currentSigningKey.value
       const result = await identify({
         identifier: bodyString(body.identifier),
         clientId: requestedClientId,
@@ -202,14 +211,19 @@ async function routeRequest(
       // reached) only ever needs the current one-time-token key -- fetched
       // here regardless of which branch password() ends up taking, since
       // that decision happens inside it, after this call already needs the
-      // key in hand.
-      const [signingKeyVersions, oneTimeTokenKeyVersions] = await Promise.all([
+      // key in hand. Fetched via getSecretVersion (one round-trip) rather
+      // than getSecretVersions (two), since the AWSPREVIOUS value it would
+      // also fetch is never used for minting.
+      const [signingKeyVersions, currentOneTimeTokenKey] = await Promise.all([
         getSecretVersions(sessionSigningKeySecretId),
-        getSecretVersions(oneTimeTokenKeySecretId),
+        getSecretVersion(oneTimeTokenKeySecretId, 'AWSCURRENT'),
       ])
+      if (!currentOneTimeTokenKey) {
+        throw new Error(`Secret ${oneTimeTokenKeySecretId} has no AWSCURRENT version`)
+      }
       const oneTimeTokenKey: OneTimeTokenKey = {
-        keyId: oneTimeTokenKeyVersions[0].versionId,
-        key: oneTimeTokenKeyVersions[0].value,
+        keyId: currentOneTimeTokenKey.versionId,
+        key: currentOneTimeTokenKey.value,
       }
       const result = await password({
         identifySession: cookies[IDENTIFY_SESSION_COOKIE],

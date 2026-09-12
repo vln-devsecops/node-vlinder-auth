@@ -933,3 +933,25 @@ done alongside what was.
   `&state=` into the redirect URL (and browser history) instead of omitting
   it -- `state` is RFC 6749 RECOMMENDED, not REQUIRED, so `authorize()` now
   treats an absent one as absent, not as `''`.
+
+  A further Opus pass on that fix caught two more issues, both in the same
+  vein as (2) above -- getting the balance between "cached" and "correct"
+  wrong for a value that now rotates. First, real: `/identify`'s signing key
+  was still fetched via the forever-cached `getSecret`, not the uncached
+  `getSecretVersion`/`getSecretVersions` used everywhere else this key
+  matters. A Lambda execution environment that stayed warm across two or
+  more 30-day rotations would keep minting identify sessions signed with
+  whatever key was current the *first* time that instance ever handled
+  `/identify` -- a key now older than both `AWSCURRENT` and `AWSPREVIOUS`,
+  so every session it mints would fail `verifySession`'s two-candidate list
+  at `/password`, even though the session itself hadn't expired. This
+  directly undermined the whole point of the previous round's fix. Fixed by
+  switching `/identify` to `getSecretVersion(id, 'AWSCURRENT')` (uncached,
+  single round-trip, no `AWSPREVIOUS` needed since minting only ever uses
+  current). Second, minor: `/password`'s one-time-token key fetch used
+  `getSecretVersions` (two round-trips, current+previous) but only ever
+  read the current entry -- `oneTimeTokenKey` mints, it doesn't verify,
+  so it never needed `AWSPREVIOUS` at all. Fixed by switching that fetch to
+  `getSecretVersion(id, 'AWSCURRENT')` too, halving the round-trips for
+  every `/password` call. All 291 lambda-src tests, lint, and
+  `tsc --noEmit` stayed clean; CI green on PR #109.
