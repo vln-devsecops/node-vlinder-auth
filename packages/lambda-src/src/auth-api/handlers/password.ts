@@ -6,6 +6,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider'
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import { hasPendingCode } from '../../shared/verificationCodes'
+import { mintOneTimeToken, type OneTimeTokenKey } from '../oneTimeToken'
 import { verifySession } from '../session'
 
 // Step 2 of the identifier-first flow: the user submits their password. The
@@ -28,21 +29,46 @@ export interface AuthTokens {
   expiresAt: number
 }
 
+// The one-time token only needs to survive a same-browser redirect round trip
+// (this Lambda -> the RP's front-end -> the RP's back-end's /token call), not
+// an interactive session -- so its TTL is far shorter than
+// IDENTIFY_SESSION_TTL_SECONDS's 300s, which has to tolerate a human reading
+// and typing a password. 60s is generous for an automated redirect chain
+// while keeping the window a leaked token (e.g. via a referrer header or
+// browser history) stays valid for as small as practical.
+export const ONE_TIME_TOKEN_TTL_SECONDS = 60
+
 export interface PasswordParams {
   identifySession: string | undefined
   password: string
   cognitoClient: CognitoIdentityProviderClient
   clientId: string
   userPoolId: string
-  signingKey: string
+  /**
+   * Candidate keys for verifying the identify session, current first (see
+   * shared/secrets.ts's `getSecretVersions`). More than one matters here:
+   * the identify session's 300s TTL is long enough for a real chance of
+   * straddling a session-signing-key rotation (see session.ts's
+   * `verifySession`).
+   */
+  signingKeys: string[]
   ddbDocClient: DynamoDBDocumentClient
   verificationCodesTableName: string
+  /**
+   * Key for encrypting the RP-handoff one-time token (see oneTimeToken.ts).
+   * Required only on the redirect path below. Always the current Secrets
+   * Manager version -- minting never needs to know about a "previous" key
+   * (that only matters to /token's verification, across a rotation
+   * boundary; see handlers/token.ts and handler.ts).
+   */
+  oneTimeTokenKey: OneTimeTokenKey
   now?: number
 }
 
 export type PasswordResult =
   | { status: 'authenticated'; tokens: AuthTokens; username: string }
   | { status: 'challenge'; challengeName: string; challengeSession: string | undefined }
+  | { status: 'redirect'; location: string; username: string; tokens: AuthTokens }
 
 export async function password(params: PasswordParams): Promise<PasswordResult> {
   const {
@@ -51,13 +77,14 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
     cognitoClient,
     clientId,
     userPoolId,
-    signingKey,
+    signingKeys,
     ddbDocClient,
     verificationCodesTableName,
+    oneTimeTokenKey,
     now,
   } = params
 
-  const claims = await verifySession(identifySession, signingKey, now)
+  const claims = await verifySession(identifySession, signingKeys, now)
   if (!claims || typeof claims.identifier !== 'string') {
     throw new InvalidSessionError('The identify session is missing or has expired.')
   }
@@ -109,15 +136,55 @@ export async function password(params: PasswordParams): Promise<PasswordResult> 
     throw new AuthFailedError('Authentication did not return the expected tokens.')
   }
   const nowMs = now ?? Date.now()
+  const tokens: AuthTokens = {
+    accessToken: result.AccessToken,
+    idToken: result.IdToken,
+    refreshToken: result.RefreshToken,
+    expiresAt: nowMs + (result.ExpiresIn ?? 3600) * 1000,
+  }
+
+  // If the identify-session carries both redirect_uri and code_challenge,
+  // this login started at /authorize (see handlers/authorize.ts) and must
+  // complete the RP handoff rather than return tokens directly to the SPA:
+  // mint the one-time token embedding these tokens and send the browser back
+  // to the RP. Their absence (today's existing direct-login case, e.g. the
+  // admin panel) leaves this path completely unchanged.
+  const redirectUri = claims.redirectUri
+  const codeChallenge = claims.codeChallenge
+  if (typeof redirectUri === 'string' && redirectUri && typeof codeChallenge === 'string' && codeChallenge) {
+    const oneTimeToken = await mintOneTimeToken(
+      { userId: username, redirectUri, codeChallenge, tokens },
+      oneTimeTokenKey,
+      ONE_TIME_TOKEN_TTL_SECONDS,
+      now,
+    )
+    const state = claims.state
+    // Built via the URL API, not string concatenation: a registered
+    // redirect_uri is free to already carry its own query string (e.g.
+    // `https://app.example.com/callback?tenant=acme`), and naively
+    // appending `?token=...` would produce a second `?`, corrupting it
+    // into a single malformed query string instead of adding a parameter.
+    const location = new URL(redirectUri)
+    location.searchParams.set('token', oneTimeToken)
+    if (typeof state === 'string' && state) {
+      location.searchParams.set('state', state)
+    }
+    return {
+      status: 'redirect',
+      username,
+      location: location.toString(),
+      // Also handed back (not just embedded in the one-time token) so the
+      // handler can still set the same AS_SESSION_COOKIE it sets on the
+      // direct-login path -- the SSO story (this browser has an AS session)
+      // must hold regardless of which flow established it.
+      tokens,
+    }
+  }
+
   return {
     status: 'authenticated',
     username,
-    tokens: {
-      accessToken: result.AccessToken,
-      idToken: result.IdToken,
-      refreshToken: result.RefreshToken,
-      expiresAt: nowMs + (result.ExpiresIn ?? 3600) * 1000,
-    },
+    tokens,
   }
 }
 

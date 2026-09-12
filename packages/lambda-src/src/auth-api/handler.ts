@@ -4,17 +4,32 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
 import { getDdbDocClient } from '../shared/ddb-client'
-import { getSecret } from '../shared/secrets'
+import { getSecretVersion, getSecretVersions } from '../shared/secrets'
 import { getSesClient } from '../shared/ses-client'
 import { UnknownClientError } from '../shared/tenants'
-import { identify, IDENTIFY_SESSION_TTL_SECONDS, InvalidIdentifierError } from './handlers/identify'
+import {
+  authorize,
+  InvalidAuthorizeRequestError,
+  UnregisteredRedirectUriError,
+  UnsupportedCodeChallengeMethodError,
+  UnsupportedResponseTypeError,
+} from './handlers/authorize'
+import {
+  identify,
+  IDENTIFY_SESSION_TTL_SECONDS,
+  IncompleteRpHandoffContextError,
+  InvalidIdentifierError,
+} from './handlers/identify'
 import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './handlers/password'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
+import { exchangeToken, InvalidOneTimeTokenError, PkceMismatchError } from './handlers/token'
 import { CognitoClientError } from './cognitoError'
+import type { OneTimeTokenKey } from './oneTimeToken'
 import { InvalidVerificationCodeError } from './verificationCodeError'
 import {
   AS_SESSION_COOKIE,
+  AUTH_METHOD_COOKIE,
   IDENTIFY_SESSION_COOKIE,
   parseCookies,
   serializeSessionCookie,
@@ -33,6 +48,12 @@ function bodyString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+/** Reads a query-string parameter as a string, defaulting anything else (including absent) to ''. */
+function queryParam(params: Record<string, string | undefined> | undefined, key: string): string {
+  const value = params?.[key]
+  return typeof value === 'string' ? value : ''
+}
+
 function json(
   statusCode: number,
   body?: unknown,
@@ -46,8 +67,29 @@ function json(
   }
 }
 
+/** A real HTTP redirect (as opposed to a 200 body carrying a location string) -- the browser follows this itself. */
+function redirect(location: string, cookies?: string[]): APIGatewayProxyStructuredResultV2 {
+  return {
+    statusCode: 302,
+    headers: { location },
+    ...(cookies ? { cookies } : {}),
+  }
+}
+
 interface RouteDeps {
-  signingKey: string
+  /**
+   * Secret ids, not fetched values -- resolving these to actual key material
+   * happens inside whichever route case below actually needs it (see the
+   * `POST /identify`/`POST /password`/`POST /token` cases), not eagerly here
+   * for every request regardless of route. This matters specifically for the
+   * one-time-token key: its current+previous lookup is deliberately uncached
+   * (see shared/secrets.ts's `getSecretVersions`), so fetching it in a
+   * shared prelude that runs before every route dispatch would charge two
+   * live Secrets Manager round-trips to routes (`/signup`, `/confirm`,
+   * `/authorize`, ...) that have nothing to do with it.
+   */
+  sessionSigningKeySecretId: string
+  oneTimeTokenKeySecretId: string
   cognitoClient: CognitoIdentityProviderClient
   ddbDocClient: DynamoDBDocumentClient
   sesClient: SESv2Client
@@ -63,7 +105,7 @@ interface RouteDeps {
 
 /** Maps a handler-thrown error to its HTTP response, or returns undefined to re-throw. */
 function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | undefined {
-  if (error instanceof InvalidIdentifierError) {
+  if (error instanceof InvalidIdentifierError || error instanceof IncompleteRpHandoffContextError) {
     return json(400, { error: error.message })
   }
   if (error instanceof InvalidSessionError) {
@@ -81,6 +123,20 @@ function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | unde
   if (error instanceof UnknownClientError) {
     return json(400, { error: error.message })
   }
+  if (
+    error instanceof InvalidAuthorizeRequestError ||
+    error instanceof UnregisteredRedirectUriError ||
+    error instanceof UnsupportedResponseTypeError ||
+    error instanceof UnsupportedCodeChallengeMethodError
+  ) {
+    return json(400, { error: error.message })
+  }
+  // InvalidOneTimeTokenError and PkceMismatchError deliberately collapse to
+  // the same generic message: the response must not let a caller distinguish
+  // "token invalid" from "PKCE mismatch" (see handlers/token.ts).
+  if (error instanceof InvalidOneTimeTokenError || error instanceof PkceMismatchError) {
+    return json(400, { error: 'The token exchange request is invalid.' })
+  }
   // Ordinary self-service failures (bad code, weak password, taken username)
   // surface as a 400 with the provider's message.
   if (error instanceof CognitoClientError) {
@@ -95,7 +151,8 @@ async function routeRequest(
   deps: RouteDeps,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const {
-    signingKey,
+    sessionSigningKeySecretId,
+    oneTimeTokenKeySecretId,
     cognitoClient,
     ddbDocClient,
     sesClient,
@@ -112,12 +169,28 @@ async function routeRequest(
   switch (event.routeKey) {
     case 'POST /api/v1/auth/identify': {
       const requestedClientId = bodyString(body.client_id) || undefined
+      // Minting only ever needs the current key -- unlike verifying (see
+      // /password below), there's no rotation-boundary case for a brand
+      // new session. Fetched via the uncached getSecretVersion (not the
+      // forever-cached getSecret) specifically so a warm instance that
+      // outlives a rotation still signs with the real current key, not
+      // whatever was current the first time this instance touched it --
+      // otherwise sessions it mints would eventually fail every
+      // verifySession candidate on the /password side.
+      const currentSigningKey = await getSecretVersion(sessionSigningKeySecretId, 'AWSCURRENT')
+      if (!currentSigningKey) {
+        throw new Error(`Secret ${sessionSigningKeySecretId} has no AWSCURRENT version`)
+      }
+      const signingKey = currentSigningKey.value
       const result = await identify({
         identifier: bodyString(body.identifier),
         clientId: requestedClientId,
         signingKey,
         config: { tenantsTableName, authAppTenantId },
         ddbDocClient,
+        redirectUri: bodyString(body.redirect_uri) || undefined,
+        codeChallenge: bodyString(body.code_challenge) || undefined,
+        state: bodyString(body.state) || undefined,
       })
       const responseBody =
         result.method === 'redirect'
@@ -132,15 +205,36 @@ async function routeRequest(
 
     case 'POST /api/v1/auth/password': {
       const cookies = parseCookies(event.cookies)
+      // Verifying the identify session needs current+previous (its 300s TTL
+      // is long enough for a real chance of straddling a rotation); minting
+      // the one-time token (the redirect branch inside password(), if
+      // reached) only ever needs the current one-time-token key -- fetched
+      // here regardless of which branch password() ends up taking, since
+      // that decision happens inside it, after this call already needs the
+      // key in hand. Fetched via getSecretVersion (one round-trip) rather
+      // than getSecretVersions (two), since the AWSPREVIOUS value it would
+      // also fetch is never used for minting.
+      const [signingKeyVersions, currentOneTimeTokenKey] = await Promise.all([
+        getSecretVersions(sessionSigningKeySecretId),
+        getSecretVersion(oneTimeTokenKeySecretId, 'AWSCURRENT'),
+      ])
+      if (!currentOneTimeTokenKey) {
+        throw new Error(`Secret ${oneTimeTokenKeySecretId} has no AWSCURRENT version`)
+      }
+      const oneTimeTokenKey: OneTimeTokenKey = {
+        keyId: currentOneTimeTokenKey.versionId,
+        key: currentOneTimeTokenKey.value,
+      }
       const result = await password({
         identifySession: cookies[IDENTIFY_SESSION_COOKIE],
         password: bodyString(body.password),
         cognitoClient,
         clientId,
         userPoolId,
-        signingKey,
+        signingKeys: signingKeyVersions.map((version) => version.value),
         ddbDocClient,
         verificationCodesTableName,
+        oneTimeTokenKey,
       })
 
       if (result.status === 'challenge') {
@@ -149,6 +243,31 @@ async function routeRequest(
           challengeSession: result.challengeSession,
         })
       }
+
+      if (result.status === 'redirect') {
+        // RP handoff completion: set the same AS session cookie as the direct
+        // path below (so the SSO story holds regardless of which flow
+        // established the session) plus the auth-method cookie, then send a
+        // real redirect back to the RP instead of a JSON body. Computed once
+        // and reused for both cookies -- two separate Date.now() calls could
+        // let them drift apart by a beat under load, for no reason: they
+        // describe the same session and should expire together.
+        const redirectMaxAgeSeconds = Math.max(
+          0,
+          Math.floor((result.tokens.expiresAt - Date.now()) / 1000),
+        )
+        return redirect(result.location, [
+          serializeSessionCookie(AS_SESSION_COOKIE, result.tokens.accessToken, {
+            maxAgeSeconds: redirectMaxAgeSeconds,
+            path: '/',
+          }),
+          serializeSessionCookie(AUTH_METHOD_COOKIE, 'local', {
+            maxAgeSeconds: redirectMaxAgeSeconds,
+            path: '/',
+          }),
+        ])
+      }
+
       // Deliver the access token as an HttpOnly, same-origin session cookie
       // (Path=/ so it reaches /api/v1/*, where the admin API's edge function
       // turns it into an Authorization header). The SPA never sees the token;
@@ -156,6 +275,10 @@ async function routeRequest(
       const maxAgeSeconds = Math.max(0, Math.floor((result.tokens.expiresAt - Date.now()) / 1000))
       return json(200, { expiresAt: result.tokens.expiresAt }, [
         serializeSessionCookie(AS_SESSION_COOKIE, result.tokens.accessToken, {
+          maxAgeSeconds,
+          path: '/',
+        }),
+        serializeSessionCookie(AUTH_METHOD_COOKIE, 'local', {
           maxAgeSeconds,
           path: '/',
         }),
@@ -237,6 +360,38 @@ async function routeRequest(
       return json(200, {})
     }
 
+    case 'GET /api/v1/auth/authorize': {
+      const params = event.queryStringParameters
+      const result = await authorize({
+        clientId: queryParam(params, 'client_id'),
+        redirectUri: queryParam(params, 'redirect_uri'),
+        responseType: queryParam(params, 'response_type'),
+        codeChallenge: queryParam(params, 'code_challenge'),
+        codeChallengeMethod: queryParam(params, 'code_challenge_method'),
+        state: queryParam(params, 'state') || undefined,
+        // `scope` (also present per doc/vendor-neutral-auth.md's diagram) is
+        // deliberately not read here -- see handlers/authorize.ts's doc
+        // comment: it is accepted-and-ignored, never validated or forwarded.
+        // No authAppTenantId: /authorize never resolves a tenant itself
+        // (see authorize.ts) -- /identify does that independently.
+        config: { tenantsTableName },
+        ddbDocClient,
+      })
+      return redirect(result.location)
+    }
+
+    case 'POST /api/v1/auth/token': {
+      const oneTimeTokenKeys: OneTimeTokenKey[] = (await getSecretVersions(oneTimeTokenKeySecretId)).map(
+        (version) => ({ keyId: version.versionId, key: version.value }),
+      )
+      const result = await exchangeToken({
+        token: bodyString(body.token),
+        codeVerifier: bodyString(body.code_verifier),
+        keys: oneTimeTokenKeys,
+      })
+      return json(200, result)
+    }
+
     default:
       return json(404, { error: `Unrecognized route: ${event.routeKey}` })
   }
@@ -254,7 +409,8 @@ export async function handler(
   event: APIGatewayProxyEventV2,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const deps: RouteDeps = {
-    signingKey: await getSecret(requireEnv('SESSION_SIGNING_KEY_SECRET_ID')),
+    sessionSigningKeySecretId: requireEnv('SESSION_SIGNING_KEY_SECRET_ID'),
+    oneTimeTokenKeySecretId: requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID'),
     cognitoClient: getCognitoClient(),
     ddbDocClient: getDdbDocClient(),
     sesClient: getSesClient(),

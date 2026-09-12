@@ -13,6 +13,14 @@ import { SignJWT, jwtVerify, type JWTPayload } from 'jose'
 
 export const IDENTIFY_SESSION_COOKIE = 'vln_auth_identify'
 export const AS_SESSION_COOKIE = 'vln_auth_session'
+// Records how the current AS session authenticated ('local' | 'federated').
+// Deliberately a *separate* cookie from AS_SESSION_COOKIE rather than a field
+// folded into it: AS_SESSION_COOKIE's value is the raw Cognito access token
+// itself, lifted verbatim into `Authorization: Bearer <value>` by the admin
+// API's edge rewrite (terraform-modules/.../admin_api_rewrite.js). Changing
+// that cookie's format to carry structured data would break that already-
+// shipped bearer-lift. Step 9 (sudo/step-up) depends on knowing this fact.
+export const AUTH_METHOD_COOKIE = 'vln_auth_method'
 
 function keyBytes(key: string): Uint8Array {
   return new TextEncoder().encode(key)
@@ -37,24 +45,35 @@ export async function signSession(
 }
 
 /**
- * Verify an HS256 JWT produced by {@link signSession}. Resolves to the payload
- * when the signature is valid and the token has not expired; resolves to null
- * on any tampering, malformed token, or expiry. `now` (epoch ms) is injectable.
+ * Verify an HS256 JWT produced by {@link signSession} against a list of
+ * candidate keys, tried in order (in practice: the session-signing key's
+ * current Secrets Manager version, then its previous one if it exists --
+ * see shared/secrets.ts's `getSecretVersions`). More than one candidate
+ * matters here because the identify-session this most often verifies has a
+ * 300-second TTL -- long enough for a real (if narrow) chance of a user's
+ * `/identify` and `/password` calls straddling a key rotation, unlike
+ * signing, which always uses only the current key. Resolves to the payload
+ * from the first candidate that verifies; resolves to null if every
+ * candidate fails, the token is tampered/malformed, or it has expired.
+ * `now` (epoch ms) is injectable.
  */
 export async function verifySession(
   token: string | undefined,
-  key: string,
+  keys: string[],
   now: number = Date.now(),
 ): Promise<JWTPayload | null> {
   if (!token) {
     return null
   }
-  try {
-    const { payload } = await jwtVerify(token, keyBytes(key), { currentDate: new Date(now) })
-    return payload
-  } catch {
-    return null
+  for (const key of keys) {
+    try {
+      const { payload } = await jwtVerify(token, keyBytes(key), { currentDate: new Date(now) })
+      return payload
+    } catch {
+      // Try the next candidate; only exhausting the whole list is failure.
+    }
   }
+  return null
 }
 
 export interface CookieOptions {
