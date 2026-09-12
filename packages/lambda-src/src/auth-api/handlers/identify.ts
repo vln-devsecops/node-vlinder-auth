@@ -27,6 +27,19 @@ export interface IdentifyParams {
   config: ResolveTenantIdForClientConfig
   ddbDocClient: DynamoDBDocumentClient
   now?: number
+  /**
+   * Present only when this /identify call originated from the RP handoff's
+   * /authorize redirect (see doc/vendor-neutral-auth.md's "Login" sequence
+   * diagram): the SPA reads these off its own URL (as forwarded by
+   * handlers/authorize.ts) and threads them through here so the eventual
+   * /password step can complete the handoff without the client re-sending
+   * them. All three normally arrive together, but each is embedded
+   * independently if present -- this doesn't assume the caller always groups
+   * them correctly.
+   */
+  redirectUri?: string
+  codeChallenge?: string
+  state?: string
 }
 
 export type IdentifyResult =
@@ -40,6 +53,9 @@ export async function identify({
   config,
   ddbDocClient,
   now,
+  redirectUri,
+  codeChallenge,
+  state,
 }: IdentifyParams): Promise<IdentifyResult> {
   const trimmed = identifier.trim()
   if (!trimmed) {
@@ -54,13 +70,22 @@ export async function identify({
     ddbDocClient,
   })
 
+  // Only defined when actually provided, so an ordinary direct-login call
+  // (none of these three present) produces exactly the same session payload
+  // as before this field existed.
+  const rpHandoffClaims = {
+    ...(redirectUri !== undefined ? { redirectUri } : {}),
+    ...(codeChallenge !== undefined ? { codeChallenge } : {}),
+    ...(state !== undefined ? { state } : {}),
+  }
+
   if (provider) {
     // Same-origin: the SPA never speaks to the IdP directly. The actual
     // /federation endpoint (GET, ?provider=&action=start|callback) is step
     // 11's job -- this only determines that a redirect is due and where to.
     const location = `/federation?provider=${encodeURIComponent(provider)}&action=start`
     const identifySession = await signSession(
-      { identifier: trimmed, method: 'redirect', tenantId, provider },
+      { identifier: trimmed, method: 'redirect', tenantId, provider, ...rpHandoffClaims },
       signingKey,
       IDENTIFY_SESSION_TTL_SECONDS,
       now,
@@ -69,7 +94,7 @@ export async function identify({
   }
 
   const identifySession = await signSession(
-    { identifier: trimmed, method: 'password', tenantId },
+    { identifier: trimmed, method: 'password', tenantId, ...rpHandoffClaims },
     signingKey,
     IDENTIFY_SESSION_TTL_SECONDS,
     now,

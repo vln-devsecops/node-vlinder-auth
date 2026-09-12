@@ -7,10 +7,13 @@ import {
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb'
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { verifyOneTimeToken } from '../oneTimeToken'
 import { signSession } from '../session'
 import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './password'
 
 const KEY = 'test-signing-key-000000000000000000000000'
+// Exactly 32 bytes when UTF-8 encoded, as A256GCM's dir mode requires.
+const ONE_TIME_TOKEN_KEY = '01234567890123456789012345678901'.slice(0, 32)
 const cognitoMock = mockClient(CognitoIdentityProviderClient)
 const ddbMock = mockClient(DynamoDBDocumentClient)
 
@@ -29,10 +32,14 @@ const base = {
   signingKey: KEY,
   ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
   verificationCodesTableName: 'verification-codes',
+  oneTimeTokenKey: ONE_TIME_TOKEN_KEY,
 }
 
-function identifySessionFor(identifier: string): Promise<string> {
-  return signSession({ identifier, method: 'password' }, KEY, 300)
+function identifySessionFor(
+  identifier: string,
+  extra: Record<string, unknown> = {},
+): Promise<string> {
+  return signSession({ identifier, method: 'password', ...extra }, KEY, 300)
 }
 
 describe('password', () => {
@@ -135,5 +142,69 @@ describe('password', () => {
       }),
     ).rejects.toThrow(UnverifiedAccountError)
     expect(cognitoMock.commandCalls(AdminInitiateAuthCommand)).toHaveLength(0)
+  })
+
+  it('completes the RP handoff with a redirect carrying a one-time token when the identify session carries redirect_uri and code_challenge', async () => {
+    const issuedAt = 1_000_000_000_000
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: {
+        AccessToken: 'a',
+        IdToken: 'i',
+        RefreshToken: 'r',
+        ExpiresIn: 3600,
+      },
+    })
+
+    const result = await password({
+      ...base,
+      identifySession: await identifySessionFor('jane@example.com', {
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge: 'test-code-challenge',
+        state: 'rp-state-value',
+      }),
+      password: 'correct horse',
+      now: issuedAt,
+    })
+
+    expect(result.status).toBe('redirect')
+    if (result.status !== 'redirect') return
+    expect(result.username).toBe('jane@example.com')
+
+    const location = new URL(result.location)
+    expect(`${location.origin}${location.pathname}`).toBe('https://app.example.com/login/callback')
+    expect(location.searchParams.get('state')).toBe('rp-state-value')
+
+    const token = location.searchParams.get('token')!
+    const payload = await verifyOneTimeToken(token, ONE_TIME_TOKEN_KEY, issuedAt)
+    expect(payload).toMatchObject({
+      userId: 'jane@example.com',
+      redirectUri: 'https://app.example.com/login/callback',
+      codeChallenge: 'test-code-challenge',
+      tokens: {
+        accessToken: 'a',
+        idToken: 'i',
+        refreshToken: 'r',
+        expiresAt: issuedAt + 3600 * 1000,
+      },
+    })
+  })
+
+  it('omits the state param entirely when the identify session carries no state', async () => {
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+
+    const result = await password({
+      ...base,
+      identifySession: await identifySessionFor('jane@example.com', {
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge: 'test-code-challenge',
+      }),
+      password: 'correct horse',
+    })
+
+    expect(result.status).toBe('redirect')
+    if (result.status !== 'redirect') return
+    expect(result.location).not.toContain('state=')
   })
 })

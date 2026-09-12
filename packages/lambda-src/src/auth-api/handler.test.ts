@@ -21,9 +21,18 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { handler } from './handler'
-import { AS_SESSION_COOKIE, IDENTIFY_SESSION_COOKIE, signSession, verifySession } from './session'
+import {
+  AS_SESSION_COOKIE,
+  AUTH_METHOD_COOKIE,
+  IDENTIFY_SESSION_COOKIE,
+  signSession,
+  verifySession,
+} from './session'
 
 const KEY = 'test-signing-key-000000000000000000000000'
+// Exactly 32 bytes when UTF-8 encoded (32 ASCII characters), as A256GCM's dir
+// mode requires -- see oneTimeToken.ts's keyBytes().
+const ONE_TIME_TOKEN_KEY = 'test-one-time-token-key-32-bytes'.slice(0, 32)
 const nowSeconds = Math.floor(Date.now() / 1000)
 const FUTURE_EXPIRY = nowSeconds + 600
 
@@ -37,8 +46,14 @@ beforeEach(() => {
   secretsManagerMock.reset()
   ddbMock.reset()
   sesMock.reset()
-  secretsManagerMock.on(GetSecretValueCommand).resolves({ SecretString: KEY })
+  secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+    if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
+      return { SecretString: ONE_TIME_TOKEN_KEY }
+    }
+    return { SecretString: KEY }
+  })
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
+  process.env.ONE_TIME_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
   process.env.TENANTS_TABLE_NAME = 'tenants-table'
@@ -51,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.SESSION_SIGNING_KEY_SECRET_ID
+  delete process.env.ONE_TIME_TOKEN_KEY_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
   delete process.env.TENANTS_TABLE_NAME
@@ -63,12 +79,13 @@ afterEach(() => {
 
 function event(
   routeKey: string,
-  opts: { body?: unknown; cookies?: string[] } = {},
+  opts: { body?: unknown; cookies?: string[]; queryStringParameters?: Record<string, string> } = {},
 ): APIGatewayProxyEventV2 {
   return {
     routeKey,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     cookies: opts.cookies,
+    queryStringParameters: opts.queryStringParameters,
   } as unknown as APIGatewayProxyEventV2
 }
 
@@ -126,6 +143,9 @@ describe('auth-api handler', () => {
     expect(setCookie).toContain('HttpOnly')
     expect(setCookie).toContain('SameSite=Strict')
     expect(setCookie).toContain('Path=/')
+
+    const methodCookie = res.cookies!.find((c) => c.startsWith(AUTH_METHOD_COOKIE))!
+    expect(cookieValue(methodCookie)).toBe('local')
   })
 
   it('POST /api/v1/auth/password 401s on bad credentials without an AS cookie', async () => {
@@ -298,6 +318,139 @@ describe('auth-api handler', () => {
       Password: 'new-pw',
       Permanent: true,
     })
+  })
+
+  it('GET /api/v1/auth/authorize redirects to the SPA root on a valid request', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          tenantId: 'acme-corp',
+          clientId: 'rp-client',
+          redirectUris: ['https://app.example.com/login/callback'],
+        },
+      ],
+    })
+
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://app.example.com/login/callback',
+          response_type: 'code',
+          code_challenge: 'test-challenge',
+          code_challenge_method: 'S256',
+          state: 'rp-state',
+        },
+      }),
+    )
+
+    expect(res.statusCode).toBe(302)
+    const location = new URL(res.headers!.location as string, 'https://auth.example.com')
+    expect(location.pathname).toBe('/')
+    expect(location.searchParams.get('client_id')).toBe('rp-client')
+  })
+
+  it('GET /api/v1/auth/authorize 400s on a redirect_uri outside the client allowlist', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ tenantId: 'acme-corp', clientId: 'rp-client', redirectUris: ['https://app.example.com/callback'] }],
+    })
+
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://evil.example.com/callback',
+          response_type: 'code',
+          code_challenge: 'test-challenge',
+          code_challenge_method: 'S256',
+          state: 'rp-state',
+        },
+      }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /api/v1/auth/token exchanges a valid one-time token and code_verifier for the embedded tokens', async () => {
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeVerifier = 'a-known-code-verifier-string'
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      ONE_TIME_TOKEN_KEY,
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: codeVerifier } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body!)).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: 123,
+    })
+  })
+
+  it('POST /api/v1/auth/token 400s on a mismatched code_verifier', async () => {
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeChallenge = createHash('sha256').update('the-real-verifier').digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      ONE_TIME_TOKEN_KEY,
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: 'wrong-verifier' } }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /api/v1/auth/password sets AUTH_METHOD_COOKIE=local and 302s to the RP when the identify session carries redirect_uri and code_challenge', async () => {
+    ddbMock.on(GetCommand).resolves({})
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+    const token = await signSession(
+      {
+        identifier: 'jane@x.com',
+        method: 'password',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge: 'test-code-challenge',
+        state: 'rp-state',
+      },
+      KEY,
+      300,
+    )
+    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
+
+    const res = await handler(
+      event('POST /api/v1/auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
+    )
+
+    expect(res.statusCode).toBe(302)
+    expect(res.headers!.location).toContain('https://app.example.com/login/callback?token=')
+
+    const methodCookie = res.cookies!.find((c) => c.startsWith(AUTH_METHOD_COOKIE))!
+    expect(cookieValue(methodCookie)).toBe('local')
+    const sessionCookie = res.cookies!.find((c) => c.startsWith(AS_SESSION_COOKIE))!
+    expect(cookieValue(sessionCookie)).toBe('a')
   })
 
   it('404s an unrecognized route', async () => {

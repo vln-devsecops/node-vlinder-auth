@@ -102,4 +102,25 @@ describe('identify', () => {
     const payload = await verifySession(result.identifySession, KEY)
     expect(payload).toMatchObject({ method: 'redirect', tenantId: 'acme-corp', provider: 'okta-acme' })
   })
+
+  it('threads redirect_uri, code_challenge and state from an /authorize-originated call into the identify session', async () => {
+    const result = await identify({
+      identifier: 'jane@example.com',
+      clientId: undefined,
+      signingKey: KEY,
+      config,
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+      redirectUri: 'https://app.example.com/login/callback',
+      codeChallenge: 'test-code-challenge',
+      state: 'rp-state-value',
+    })
+
+    const payload = await verifySession(result.identifySession, KEY)
+    expect(payload).toMatchObject({
+      identifier: 'jane@example.com',
+      redirectUri: 'https://app.example.com/login/callback',
+      codeChallenge: 'test-code-challenge',
+      state: 'rp-state-value',
+    })
+  })
 })

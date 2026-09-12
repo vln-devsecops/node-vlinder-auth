@@ -106,6 +106,47 @@ export async function resolveTenantIdForClient(
   return tenantId
 }
 
+/**
+ * Resolves the `redirect_uri` allowlist registered for `clientId` -- used by
+ * `/authorize` (see handlers/authorize.ts) to reject a redirect target the
+ * client owner never registered, closing the classic OAuth open-redirect
+ * hole. Queries the same `clientId-index` GSI as {@link resolveTenantIdForClient}
+ * with a second, separate query rather than folding into that function's
+ * single call: that function's return shape is depended on elsewhere, and
+ * /authorize is an ordinary API Gateway request (not the timeout-sensitive
+ * Cognito pre-token-generation trigger), so the extra round trip costs
+ * nothing that matters here.
+ *
+ * Throws {@link UnknownClientError} if no item exists for `clientId` --
+ * consistent with resolveTenantIdForClient's refusal to guess a tenant for an
+ * unregistered client. If the item exists but carries no `redirectUris`
+ * attribute, returns an empty array rather than treating it as an error: an
+ * empty allowlist just means every redirect_uri fails validation downstream,
+ * which is the correct default-deny behavior, not a special case to detect
+ * here.
+ */
+export async function resolveClientRedirectUris(
+  clientId: string,
+  config: { tenantsTableName: string },
+  ddbDocClient: DynamoDBDocumentClient,
+): Promise<string[]> {
+  const result = await ddbDocClient.send(
+    new QueryCommand({
+      TableName: config.tenantsTableName,
+      IndexName: 'clientId-index',
+      KeyConditionExpression: 'clientId = :c',
+      ExpressionAttributeValues: { ':c': clientId },
+      Limit: 1,
+    }),
+  )
+
+  const item = result.Items?.[0]
+  if (!item) {
+    throw new UnknownClientError(`No tenant is registered for client_id ${clientId}`)
+  }
+  return (item.redirectUris as string[] | undefined) ?? []
+}
+
 export interface ResolveIdentityProviderForDomainParams {
   /** The tenant already resolved via {@link resolveTenantIdForClient} -- the lookup below is scoped to it. */
   tenantId: string

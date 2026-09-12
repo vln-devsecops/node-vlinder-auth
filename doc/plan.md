@@ -180,14 +180,14 @@ expected issuer is configuration, not a constant").
 
 ### 6. RP handoff: `/authorize` + `/token` — Sonnet / **Opus (security-critical)**
 
-- [ ] One-time token as `jwe({user, redirect_uri, code_challenge, timestamp})`
+- [x] One-time token as `jwe({user, redirect_uri, code_challenge, timestamp})`
       — `alg: dir`, `enc: A256GCM`, key held by the auth Lambda.
-- [ ] PKCE verification: `base64url(sha256(code_verifier))` against the
+- [x] PKCE verification: `base64url(sha256(code_verifier))` against the
       embedded challenge, plus expiry. Require `code_challenge_method=S256`.
-- [ ] `client_id`/`redirect_uri` allowlist validation at `/authorize`.
-- [ ] Extend the identify-session JWS to carry `redirect_uri`,
+- [x] `client_id`/`redirect_uri` allowlist validation at `/authorize`.
+- [x] Extend the identify-session JWS to carry `redirect_uri`,
       `code_challenge` and the RP's `state` across identify → password.
-- [ ] Record `authMethod` (`local` | `federated`) on the AS session — step 9
+- [x] Record `authMethod` (`local` | `federated`) on the AS session — step 9
       depends on it.
 
 ### 7. Refresh: JWE wrapping, rotation, grant container — Sonnet / **Opus**
@@ -733,3 +733,62 @@ done alongside what was.
   re-ran the full verification suite myself rather than trusting its
   report, then handled `plan.md` and the PR. This is the first step done
   under that split going forward, per rlc.
+
+- **2026-09-12** — Step 6 (RP handoff: `/authorize` + `/token`,
+  **security-critical**). Resolved one real design gap before implementing:
+  the plan's illustrative one-time-token payload
+  (`jwe({user, redirect_uri, code_challenge, timestamp})`) has no token
+  material, but `/token` must return real Cognito tokens with no second
+  Cognito call, since this Lambda is stateless. Confirmed directly with rlc:
+  the one-time token's actual payload also carries the `AuthenticationResult`
+  obtained back at `/password` (access/id/refresh token + expiry),
+  end-to-end encrypted (`dir`/A256GCM JWE, `oneTimeToken.ts`) so it's opaque
+  to the browser and the RP's front-end, which only relay it.
+
+  New: `oneTimeToken.ts` (mint/verify, 32-byte key requirement enforced
+  loudly rather than left to a cryptic `jose` error), `pkce.ts`
+  (`verifyCodeChallenge`, S256 only -- plain PKCE deliberately unsupported),
+  `handlers/authorize.ts` (validates client→tenant, then `redirect_uri`
+  against that client's registered allowlist by exact-string match --
+  never redirects on any validation failure, only on success, to avoid
+  open-redirect risk from a partially-OAuth-spec-compliant error-redirect
+  path), `handlers/token.ts` (decrypts the one-time token, checks PKCE,
+  hands back the embedded tokens -- `InvalidOneTimeTokenError` and
+  `PkceMismatchError` stay distinct internally but collapse to one generic
+  400 at the HTTP layer, so a caller can't distinguish "token invalid" from
+  "PKCE mismatch"). `shared/tenants.ts` gained `resolveClientRedirectUris`
+  (a second `clientId-index` query, deliberately not merged into
+  `resolveTenantIdForClient` -- that function's shape is depended on
+  elsewhere, and `/authorize` isn't the timeout-sensitive pre-token-
+  generation trigger, so the extra round trip costs nothing that matters).
+
+  `identify.ts` now threads optional `redirectUri`/`codeChallenge`/`state`
+  into the identify-session JWS when present, unchanged otherwise.
+  `password.ts` checks for `redirectUri`+`codeChallenge` on the identify-
+  session claims after a successful Cognito auth: if present, mints the
+  one-time token and returns a new `redirect` result instead of tokens in
+  the body; if absent (today's existing direct-login case, e.g. the admin
+  panel), completely unchanged. `authMethod` is recorded as a **separate**
+  cookie (`vln_auth_method`, `AUTH_METHOD_COOKIE`) rather than folded into
+  the existing AS session cookie -- confirmed by reading
+  `terraform-modules`' `admin_api_rewrite.js`, which lifts that cookie's
+  value verbatim into a `Bearer` header, so its format can't change without
+  breaking that already-shipped mechanism. Always `'local'` for now --
+  there is no federated-login completion path yet (step 11).
+
+  `terraform-modules` (new PR #282 against `feature/cognito-auth-module`,
+  not #133 or #281 -- every change onto that branch now gets its own PR per
+  rlc's standing direction): the `CLIENT#` registry item gained
+  `redirectUris`, sourced from the same `callback_urls` a client's own
+  Cognito app client already declares (no second, driftable allowlist), and
+  a new `auth_one_time_token_key` secret, sized to exactly 32 raw bytes
+  (`--password-length 32 --exclude-punctuation`) so `oneTimeToken.ts` needs
+  no decoding step.
+
+  Implemented by a clean-context agent from a thorough, decision-annotated
+  brief (I resolved every design ambiguity myself first, including the
+  one-time-token/Cognito-call question above, before writing it, so the
+  agent implemented rather than designed); I reviewed the full diff and
+  independently re-ran verification myself before proceeding. The
+  terraform-modules registry/secret extension I wrote directly, matching
+  the exact contracts the agent's lambda-src code expects.

@@ -2,6 +2,7 @@ import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-d
 import { mockClient } from 'aws-sdk-client-mock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  resolveClientRedirectUris,
   resolveIdentityProviderForDomain,
   resolveTenantForNewUser,
   resolveTenantIdForClient,
@@ -110,6 +111,52 @@ describe('resolveTenantIdForClient', () => {
         config: { authAppTenantId: 'auth', tenantsTableName: 'tenants-table' },
         ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
       }),
+    ).rejects.toThrow(UnknownClientError)
+  })
+})
+
+describe('resolveClientRedirectUris', () => {
+  it('resolves the registered redirectUris for a known client_id via the clientId-index', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ tenantId: 'acme-corp', clientId: 'client-abc', redirectUris: ['https://app.example.com/callback'] }],
+    })
+
+    const redirectUris = await resolveClientRedirectUris(
+      'client-abc',
+      { tenantsTableName: 'tenants-table' },
+      ddbMock as unknown as DynamoDBDocumentClient,
+    )
+
+    expect(redirectUris).toEqual(['https://app.example.com/callback'])
+    const queryCall = ddbMock.commandCalls(QueryCommand)[0]
+    expect(queryCall.args[0].input).toMatchObject({
+      TableName: 'tenants-table',
+      IndexName: 'clientId-index',
+      ExpressionAttributeValues: { ':c': 'client-abc' },
+    })
+  })
+
+  it('returns an empty array when the registered client has no redirectUris attribute', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [{ tenantId: 'acme-corp', clientId: 'client-abc' }] })
+
+    const redirectUris = await resolveClientRedirectUris(
+      'client-abc',
+      { tenantsTableName: 'tenants-table' },
+      ddbMock as unknown as DynamoDBDocumentClient,
+    )
+
+    expect(redirectUris).toEqual([])
+  })
+
+  it('throws UnknownClientError for a client_id with no registered tenant', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] })
+
+    await expect(
+      resolveClientRedirectUris(
+        'someone-elses-client',
+        { tenantsTableName: 'tenants-table' },
+        ddbMock as unknown as DynamoDBDocumentClient,
+      ),
     ).rejects.toThrow(UnknownClientError)
   })
 })

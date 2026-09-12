@@ -13,6 +13,14 @@ import { SignJWT, jwtVerify, type JWTPayload } from 'jose'
 
 export const IDENTIFY_SESSION_COOKIE = 'vln_auth_identify'
 export const AS_SESSION_COOKIE = 'vln_auth_session'
+// Records how the current AS session authenticated ('local' | 'federated').
+// Deliberately a *separate* cookie from AS_SESSION_COOKIE rather than a field
+// folded into it: AS_SESSION_COOKIE's value is the raw Cognito access token
+// itself, lifted verbatim into `Authorization: Bearer <value>` by the admin
+// API's edge rewrite (terraform-modules/.../admin_api_rewrite.js). Changing
+// that cookie's format to carry structured data would break that already-
+// shipped bearer-lift. Step 9 (sudo/step-up) depends on knowing this fact.
+export const AUTH_METHOD_COOKIE = 'vln_auth_method'
 
 function keyBytes(key: string): Uint8Array {
   return new TextEncoder().encode(key)
