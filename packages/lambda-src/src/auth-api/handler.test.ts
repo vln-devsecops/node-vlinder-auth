@@ -7,7 +7,11 @@ import {
   SignUpCommand,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider'
-import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
+import {
+  GetSecretValueCommand,
+  ResourceNotFoundException,
+  SecretsManagerClient,
+} from '@aws-sdk/client-secrets-manager'
 import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2'
 import {
   DeleteCommand,
@@ -21,9 +25,26 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { handler } from './handler'
-import { AS_SESSION_COOKIE, IDENTIFY_SESSION_COOKIE, signSession, verifySession } from './session'
+import type { OneTimeTokenKey } from './oneTimeToken'
+import {
+  AS_SESSION_COOKIE,
+  AUTH_METHOD_COOKIE,
+  IDENTIFY_SESSION_COOKIE,
+  signSession,
+  verifySession,
+} from './session'
 
 const KEY = 'test-signing-key-000000000000000000000000'
+// Exactly 32 bytes when UTF-8 encoded (32 ASCII characters), as A256GCM's dir
+// mode requires -- see oneTimeToken.ts's keyBytes().
+const ONE_TIME_TOKEN_KEY_MATERIAL = 'test-one-time-token-key-32-bytes'.slice(0, 32)
+const ONE_TIME_TOKEN_KEY: OneTimeTokenKey = {
+  keyId: 'version-current',
+  key: ONE_TIME_TOKEN_KEY_MATERIAL,
+}
+// A distinct 32-byte value standing in for the key that was AWSCURRENT
+// before the most recent rotation -- used by the rotation-boundary test.
+const PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL = 'test-previous-one-time-token-key'.slice(0, 32)
 const nowSeconds = Math.floor(Date.now() / 1000)
 const FUTURE_EXPIRY = nowSeconds + 600
 
@@ -37,8 +58,28 @@ beforeEach(() => {
   secretsManagerMock.reset()
   ddbMock.reset()
   sesMock.reset()
-  secretsManagerMock.on(GetSecretValueCommand).resolves({ SecretString: KEY })
+  secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+    if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        return { SecretString: PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-previous' }
+      }
+      // No VersionStage (getSecret, used elsewhere) or AWSCURRENT both get
+      // the current value -- getSecret never passes VersionStage at all.
+      return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
+    }
+    // The session-signing-key secret: /password's getSecretVersions call
+    // needs a VersionId even though there's no AWSPREVIOUS in most of these
+    // tests (getSecretVersion signals "doesn't exist" via
+    // ResourceNotFoundException, not an omitted field -- see below), and
+    // /identify's plain getSecret call ignores VersionId entirely, so
+    // returning one unconditionally here is harmless for both callers.
+    if (input.VersionStage === 'AWSPREVIOUS') {
+      throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+    }
+    return { SecretString: KEY, VersionId: 'session-key-version-current' }
+  })
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
+  process.env.ONE_TIME_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
   process.env.TENANTS_TABLE_NAME = 'tenants-table'
@@ -51,6 +92,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.SESSION_SIGNING_KEY_SECRET_ID
+  delete process.env.ONE_TIME_TOKEN_KEY_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
   delete process.env.TENANTS_TABLE_NAME
@@ -63,12 +105,13 @@ afterEach(() => {
 
 function event(
   routeKey: string,
-  opts: { body?: unknown; cookies?: string[] } = {},
+  opts: { body?: unknown; cookies?: string[]; queryStringParameters?: Record<string, string> } = {},
 ): APIGatewayProxyEventV2 {
   return {
     routeKey,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     cookies: opts.cookies,
+    queryStringParameters: opts.queryStringParameters,
   } as unknown as APIGatewayProxyEventV2
 }
 
@@ -84,7 +127,7 @@ describe('auth-api handler', () => {
     expect(JSON.parse(res.body!)).toEqual({ method: 'password' })
     const setCookie = res.cookies!.find((c) => c.startsWith(IDENTIFY_SESSION_COOKIE))!
     expect(setCookie).toContain('HttpOnly')
-    expect(await verifySession(cookieValue(setCookie), KEY)).toMatchObject({
+    expect(await verifySession(cookieValue(setCookie), [KEY])).toMatchObject({
       identifier: 'jane@x.com',
       tenantId: 'auth',
     })
@@ -126,6 +169,9 @@ describe('auth-api handler', () => {
     expect(setCookie).toContain('HttpOnly')
     expect(setCookie).toContain('SameSite=Strict')
     expect(setCookie).toContain('Path=/')
+
+    const methodCookie = res.cookies!.find((c) => c.startsWith(AUTH_METHOD_COOKIE))!
+    expect(cookieValue(methodCookie)).toBe('local')
   })
 
   it('POST /api/v1/auth/password 401s on bad credentials without an AS cookie', async () => {
@@ -183,6 +229,12 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
+    // Regression: the session-signing key and one-time-token key must not
+    // be fetched at all for a route that never uses either -- see
+    // shared/secrets.ts's getSecretVersions doc comment on why an eager,
+    // every-route prelude fetch would be wasteful specifically for these
+    // deliberately-uncached lookups.
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand)).toHaveLength(0)
     expect(cognitoMock.commandCalls(SignUpCommand)[0].args[0].input).toMatchObject({
       ClientId: 'client-abc',
       Username: 'jane@x.com',
@@ -298,6 +350,299 @@ describe('auth-api handler', () => {
       Password: 'new-pw',
       Permanent: true,
     })
+  })
+
+  it('GET /api/v1/auth/authorize redirects to the SPA root on a valid request', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          tenantId: 'acme-corp',
+          clientId: 'rp-client',
+          redirectUris: ['https://app.example.com/login/callback'],
+        },
+      ],
+    })
+
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://app.example.com/login/callback',
+          response_type: 'code',
+          code_challenge: 'test-challenge',
+          code_challenge_method: 'S256',
+          state: 'rp-state',
+        },
+      }),
+    )
+
+    expect(res.statusCode).toBe(302)
+    const location = new URL(res.headers!.location as string, 'https://auth.example.com')
+    expect(location.pathname).toBe('/')
+    expect(location.searchParams.get('client_id')).toBe('rp-client')
+    // /authorize needs neither the session-signing key nor the one-time-
+    // token key -- same regression this route class should never trip.
+    expect(secretsManagerMock.commandCalls(GetSecretValueCommand)).toHaveLength(0)
+  })
+
+  it('GET /api/v1/auth/authorize omits the state param entirely when the RP did not send one', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          tenantId: 'acme-corp',
+          clientId: 'rp-client',
+          redirectUris: ['https://app.example.com/login/callback'],
+        },
+      ],
+    })
+
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://app.example.com/login/callback',
+          response_type: 'code',
+          code_challenge: 'test-challenge',
+          code_challenge_method: 'S256',
+        },
+      }),
+    )
+
+    const location = new URL(res.headers!.location as string, 'https://auth.example.com')
+    expect(location.searchParams.has('state')).toBe(false)
+  })
+
+  it('GET /api/v1/auth/authorize 400s on a redirect_uri outside the client allowlist', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ tenantId: 'acme-corp', clientId: 'rp-client', redirectUris: ['https://app.example.com/callback'] }],
+    })
+
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://evil.example.com/callback',
+          response_type: 'code',
+          code_challenge: 'test-challenge',
+          code_challenge_method: 'S256',
+          state: 'rp-state',
+        },
+      }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('GET /api/v1/auth/authorize 400s on a missing code_challenge, not a 500', async () => {
+    // Regression: InvalidAuthorizeRequestError wasn't mapped in
+    // errorResponse(), so this used to fall through to `throw error` and
+    // surface as an unhandled 500 instead of the intended 400.
+    const res = await handler(
+      event('GET /api/v1/auth/authorize', {
+        queryStringParameters: {
+          client_id: 'rp-client',
+          redirect_uri: 'https://app.example.com/login/callback',
+          response_type: 'code',
+          code_challenge: '',
+          code_challenge_method: 'S256',
+          state: 'rp-state',
+        },
+      }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /api/v1/auth/token exchanges a valid one-time token and code_verifier for the embedded tokens', async () => {
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeVerifier = 'a-known-code-verifier-string'
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      ONE_TIME_TOKEN_KEY,
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: codeVerifier } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body!)).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: 123,
+    })
+  })
+
+  it('POST /api/v1/auth/token 400s on a mismatched code_verifier', async () => {
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeChallenge = createHash('sha256').update('the-real-verifier').digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      ONE_TIME_TOKEN_KEY,
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: 'wrong-verifier' } }),
+    )
+
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('POST /api/v1/auth/token still exchanges a token minted with the AWSPREVIOUS key (rotation boundary)', async () => {
+    // Simulates the exact race the fix targets: this token was minted while
+    // the now-AWSPREVIOUS key was still AWSCURRENT, and is being exchanged
+    // after a rotation has since replaced AWSCURRENT.
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeVerifier = 'a-known-code-verifier-string'
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      { keyId: 'version-previous', key: PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL },
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: codeVerifier } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body!)).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: 123,
+    })
+  })
+
+  it('POST /api/v1/auth/token still works with only a current key when Secrets Manager has no AWSPREVIOUS yet (a fresh, never-rotated deployment)', async () => {
+    secretsManagerMock.reset()
+    secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+      }
+      if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
+        return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
+      }
+      return { SecretString: KEY, VersionId: 'session-key-version-current' }
+    })
+
+    const { createHash } = await import('node:crypto')
+    const { mintOneTimeToken } = await import('./oneTimeToken')
+    const codeVerifier = 'a-known-code-verifier-string'
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const token = await mintOneTimeToken(
+      {
+        userId: 'jane@x.com',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge,
+        tokens: { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 },
+      },
+      ONE_TIME_TOKEN_KEY,
+      60,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/token', { body: { token, code_verifier: codeVerifier } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body!)).toEqual({
+      accessToken: 'a',
+      idToken: 'i',
+      refreshToken: 'r',
+      expiresAt: 123,
+    })
+  })
+
+  it('POST /api/v1/auth/password still mints a working one-time token when Secrets Manager has no AWSPREVIOUS yet', async () => {
+    secretsManagerMock.reset()
+    secretsManagerMock.on(GetSecretValueCommand).callsFake((input) => {
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+      }
+      if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
+        return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
+      }
+      return { SecretString: KEY, VersionId: 'session-key-version-current' }
+    })
+    ddbMock.on(GetCommand).resolves({})
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+    const identifyToken = await signSession(
+      {
+        identifier: 'jane@x.com',
+        method: 'password',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge: 'test-code-challenge',
+        state: 'rp-state',
+      },
+      KEY,
+      300,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/password', {
+        body: { password: 'pw' },
+        cookies: [`${IDENTIFY_SESSION_COOKIE}=${identifyToken}`],
+      }),
+    )
+
+    expect(res.statusCode).toBe(302)
+    expect(res.headers!.location).toContain('https://app.example.com/login/callback?token=')
+  })
+
+  it('POST /api/v1/auth/password sets AUTH_METHOD_COOKIE=local and 302s to the RP when the identify session carries redirect_uri and code_challenge', async () => {
+    ddbMock.on(GetCommand).resolves({})
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 },
+    })
+    const token = await signSession(
+      {
+        identifier: 'jane@x.com',
+        method: 'password',
+        redirectUri: 'https://app.example.com/login/callback',
+        codeChallenge: 'test-code-challenge',
+        state: 'rp-state',
+      },
+      KEY,
+      300,
+    )
+    const identifyCookie = `${IDENTIFY_SESSION_COOKIE}=${token}`
+
+    const res = await handler(
+      event('POST /api/v1/auth/password', { body: { password: 'pw' }, cookies: [identifyCookie] }),
+    )
+
+    expect(res.statusCode).toBe(302)
+    expect(res.headers!.location).toContain('https://app.example.com/login/callback?token=')
+
+    const methodCookie = res.cookies!.find((c) => c.startsWith(AUTH_METHOD_COOKIE))!
+    expect(cookieValue(methodCookie)).toBe('local')
+    const sessionCookie = res.cookies!.find((c) => c.startsWith(AS_SESSION_COOKIE))!
+    expect(cookieValue(sessionCookie)).toBe('a')
   })
 
   it('404s an unrecognized route', async () => {

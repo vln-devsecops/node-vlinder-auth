@@ -203,6 +203,15 @@ All handlers are consumed from the `@vln-devsecops/auth-lambda` package:
 - **pre-token-generation** (V2) — resolves roles to privileges and writes the
   scope claims, the full set on the ID token and the active subset on the
   access token.
+- **rotate-secret** — invoked on a recurring schedule (not by anything in
+  this package), not a request. Generates a new random value for whichever
+  Secrets Manager secret its event names and writes it via `PutSecretValue`,
+  which Secrets Manager itself promotes to `AWSCURRENT` while demoting the
+  previous value to `AWSPREVIOUS` — the versioning the session-signing key
+  and the RP-handoff one-time-token key both already tolerate a rotation
+  boundary against. One handler, reused by a separate schedule per secret;
+  which secret and what password length arrive as the event payload, never
+  hardcoded here.
 
 Each Lambda's IAM policy grants both the DynamoDB actions it needs **and**
 `kms:Decrypt`/`GenerateDataKey`/`DescribeKey` on the table CMKs — DynamoDB

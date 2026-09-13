@@ -1,5 +1,6 @@
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import {
+  assertRegisteredRedirectUri,
   resolveIdentityProviderForDomain,
   resolveTenantIdForClient,
   type ResolveTenantIdForClientConfig,
@@ -27,6 +28,19 @@ export interface IdentifyParams {
   config: ResolveTenantIdForClientConfig
   ddbDocClient: DynamoDBDocumentClient
   now?: number
+  /**
+   * Present only when this /identify call originated from the RP handoff's
+   * /authorize redirect (see doc/vendor-neutral-auth.md's "Login" sequence
+   * diagram): the SPA reads these off its own URL (as forwarded by
+   * handlers/authorize.ts) and threads them through here so the eventual
+   * /password step can complete the handoff without the client re-sending
+   * them. All three normally arrive together, but each is embedded
+   * independently if present -- this doesn't assume the caller always groups
+   * them correctly.
+   */
+  redirectUri?: string
+  codeChallenge?: string
+  state?: string
 }
 
 export type IdentifyResult =
@@ -40,6 +54,9 @@ export async function identify({
   config,
   ddbDocClient,
   now,
+  redirectUri,
+  codeChallenge,
+  state,
 }: IdentifyParams): Promise<IdentifyResult> {
   const trimmed = identifier.trim()
   if (!trimmed) {
@@ -54,13 +71,51 @@ export async function identify({
     ddbDocClient,
   })
 
+  // /authorize (handlers/authorize.ts) already validates redirect_uri
+  // against the calling client's registered allowlist -- but that check
+  // must not be the *only* place it happens: a caller can reach /identify
+  // directly, skipping /authorize entirely, and inject an arbitrary
+  // redirect_uri that /password would later 302 to unchecked. Re-derive and
+  // re-check here independently (same defense-in-depth posture as
+  // admin-api/authz.ts's per-handler tenant checks) rather than trust that
+  // whatever called this already went through /authorize.
+  if (redirectUri !== undefined) {
+    // Without a client_id, there is no registered allowlist to check
+    // against at all -- and no RP handoff can have started without one,
+    // since /authorize always requires it. Without a code_challenge, a
+    // /password step later couldn't complete PKCE either. Either gap means
+    // this isn't a genuine RP-handoff request; refuse to carry the
+    // redirect_uri forward rather than guess what the caller meant. Its own
+    // error class, distinct from UnregisteredRedirectUriError: that one
+    // means "this redirect_uri was checked against the allowlist and
+    // rejected" (the open-redirect signal worth alerting on), which is a
+    // different failure than "the request didn't even have enough context
+    // to check" -- collapsing the two would make it impossible to tell an
+    // open-redirect probe from an ordinary client integration bug.
+    if (!clientId || !codeChallenge) {
+      throw new IncompleteRpHandoffContextError(
+        'redirect_uri requires both a client_id and a code_challenge.',
+      )
+    }
+    await assertRegisteredRedirectUri(clientId, redirectUri, config, ddbDocClient)
+  }
+
+  // Only defined when actually provided, so an ordinary direct-login call
+  // (none of these three present) produces exactly the same session payload
+  // as before this field existed.
+  const rpHandoffClaims = {
+    ...(redirectUri !== undefined ? { redirectUri } : {}),
+    ...(codeChallenge !== undefined ? { codeChallenge } : {}),
+    ...(state !== undefined ? { state } : {}),
+  }
+
   if (provider) {
     // Same-origin: the SPA never speaks to the IdP directly. The actual
     // /federation endpoint (GET, ?provider=&action=start|callback) is step
     // 11's job -- this only determines that a redirect is due and where to.
     const location = `/federation?provider=${encodeURIComponent(provider)}&action=start`
     const identifySession = await signSession(
-      { identifier: trimmed, method: 'redirect', tenantId, provider },
+      { identifier: trimmed, method: 'redirect', tenantId, provider, ...rpHandoffClaims },
       signingKey,
       IDENTIFY_SESSION_TTL_SECONDS,
       now,
@@ -69,7 +124,7 @@ export async function identify({
   }
 
   const identifySession = await signSession(
-    { identifier: trimmed, method: 'password', tenantId },
+    { identifier: trimmed, method: 'password', tenantId, ...rpHandoffClaims },
     signingKey,
     IDENTIFY_SESSION_TTL_SECONDS,
     now,
@@ -78,3 +133,4 @@ export async function identify({
 }
 
 export class InvalidIdentifierError extends Error {}
+export class IncompleteRpHandoffContextError extends Error {}

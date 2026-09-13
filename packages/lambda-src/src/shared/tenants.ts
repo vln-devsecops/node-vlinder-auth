@@ -106,6 +106,74 @@ export async function resolveTenantIdForClient(
   return tenantId
 }
 
+/**
+ * Resolves the `redirect_uri` allowlist registered for `clientId` -- used by
+ * `/authorize` (see handlers/authorize.ts) to reject a redirect target the
+ * client owner never registered, closing the classic OAuth open-redirect
+ * hole. Queries the same `clientId-index` GSI as {@link resolveTenantIdForClient}
+ * with a second, separate query rather than folding into that function's
+ * single call: that function's return shape is depended on elsewhere, and
+ * /authorize is an ordinary API Gateway request (not the timeout-sensitive
+ * Cognito pre-token-generation trigger), so the extra round trip costs
+ * nothing that matters here.
+ *
+ * Throws {@link UnknownClientError} if no item exists for `clientId` --
+ * consistent with resolveTenantIdForClient's refusal to guess a tenant for an
+ * unregistered client. If the item exists but carries no `redirectUris`
+ * attribute, returns an empty array rather than treating it as an error: an
+ * empty allowlist just means every redirect_uri fails validation downstream,
+ * which is the correct default-deny behavior, not a special case to detect
+ * here.
+ */
+export async function resolveClientRedirectUris(
+  clientId: string,
+  config: { tenantsTableName: string },
+  ddbDocClient: DynamoDBDocumentClient,
+): Promise<string[]> {
+  const result = await ddbDocClient.send(
+    new QueryCommand({
+      TableName: config.tenantsTableName,
+      IndexName: 'clientId-index',
+      KeyConditionExpression: 'clientId = :c',
+      ExpressionAttributeValues: { ':c': clientId },
+      Limit: 1,
+    }),
+  )
+
+  const item = result.Items?.[0]
+  if (!item) {
+    throw new UnknownClientError(`No tenant is registered for client_id ${clientId}`)
+  }
+  return (item.redirectUris as string[] | undefined) ?? []
+}
+
+export class UnregisteredRedirectUriError extends Error {}
+
+/**
+ * Throws {@link UnregisteredRedirectUriError} unless `redirectUri` is an
+ * exact-string match in `clientId`'s registered allowlist -- the
+ * open-redirect guard for the RP handoff. Centralized here (rather than each
+ * caller resolving the list and checking membership itself) because this
+ * check must hold at **every** entry point that lets a caller embed a
+ * `redirect_uri` into an eventual redirect, not just `/authorize`:
+ * `/identify` also accepts one (to thread it into the identify-session
+ * ahead of `/password`) and must independently re-verify it rather than
+ * trust that the caller already went through `/authorize` -- an attacker
+ * calling `/identify` directly, skipping `/authorize` entirely, is exactly
+ * the bypass this closes.
+ */
+export async function assertRegisteredRedirectUri(
+  clientId: string,
+  redirectUri: string,
+  config: { tenantsTableName: string },
+  ddbDocClient: DynamoDBDocumentClient,
+): Promise<void> {
+  const redirectUris = await resolveClientRedirectUris(clientId, config, ddbDocClient)
+  if (!redirectUris.includes(redirectUri)) {
+    throw new UnregisteredRedirectUriError(`redirect_uri is not registered for client_id ${clientId}`)
+  }
+}
+
 export interface ResolveIdentityProviderForDomainParams {
   /** The tenant already resolved via {@link resolveTenantIdForClient} -- the lookup below is scoped to it. */
   tenantId: string
