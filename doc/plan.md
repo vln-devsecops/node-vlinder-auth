@@ -201,14 +201,14 @@ expected issuer is configuration, not a constant").
 
 ### 8. Reference BFF — Sonnet / **Opus (security-critical)**
 
-- [ ] A minimal but fully functional BFF in this repo: PKCE minting, encrypted
+- [x] A minimal but fully functional BFF in this repo: PKCE minting, encrypted
       `state`, the callback exchange, the refresh-token cookie, and relays for
       `/sudo`, `/whoami` and `/logout`.
-- [ ] A front-end client helper that single-flights refreshes.
-- [ ] Configuration switch for whether the access token reaches JS,
+- [x] A front-end client helper that single-flights refreshes.
+- [x] Configuration switch for whether the access token reaches JS,
       **defaulting to cookie-only**. Opting in is for apps that must send it
       cross-origin as a bearer token.
-- [ ] **Double-submit CSRF protection on by default**, not deferred until a
+- [x] **Double-submit CSRF protection on by default**, not deferred until a
       form-submittable route exists. A second cookie (`Secure`,
       `SameSite=Strict`, deliberately *not* `HttpOnly`) alongside the
       refresh-token cookie; the client helper echoes it in a custom header on
@@ -218,7 +218,9 @@ expected issuer is configuration, not a constant").
       `modules/aws/vlinder_auth/doc/admin-api-csrf.md` — implement that here,
       always on, with disabling it a documented deviation rather than a
       routine option.
-- [ ] Publish it dual ESM+CJS like the other packages.
+- [x] Publish it dual ESM+CJS. (No other package in this repo actually does
+      this yet — see the Backlog's "Dual ESM+CJS retrofit" entry — so this is
+      the first, not a case of matching existing precedent.)
 
 ### 8a. Double-submit on the admin API — Sonnet / **Opus (security-critical)**
 
@@ -1073,3 +1075,61 @@ done alongside what was.
   now called out with a comment. All 318 lambda-src tests, lint, and
   `tsc --noEmit` stayed clean throughout, including three repeated full test
   runs to check for flakiness.
+
+- **2026-09-13** — Step 8 (reference BFF). New package
+  `@vln-devsecops/reference-bff`: `GET /login` (mints PKCE material and this
+  BFF's own encrypted `state`, `302`s to `/authorize`), `GET /login/callback`
+  (decrypts `state`, exchanges the one-time token server-to-server, mints the
+  refresh-token/CSRF/access-token cookies), `POST /refresh` (CSRF-protected,
+  rotates all three cookies together, clears them and `401`s on an upstream
+  `401`), and thin passthrough relays for `/sudo`/`/whoami`/`/logout` (these
+  `404` today, since steps 9/10 haven't built the auth-service side yet —
+  expected, tested against a mocked upstream client). Nothing in this repo
+  established an HTTP framework precedent; asked rlc, who chose Express.
+  Double-submit CSRF is this package's first real implementation of the
+  design in `terraform-modules`'
+  `modules/aws/vlinder_auth/doc/admin-api-csrf.md` (not yet built anywhere
+  before this) — step 8a will bring the admin API into line with what's
+  built here. That doc leaves "session id" abstract; concretely, for this
+  BFF, it's the refresh-token cookie's own opaque value, so the CSRF cookie
+  naturally rotates in lockstep with it. A separate `./client` export (zero
+  Node-only imports) ships the single-flighting refresh helper. Published
+  dual ESM+CJS via `tsup` — despite the checklist's "like the other
+  packages" wording, no package in this repo actually does dual-format
+  publishing yet (confirmed while researching: `lambda-src` is CJS-only for
+  Lambda-runtime reasons, `ui-auth` is ESM-only via a bare `main`), so this
+  is the first, not a case of matching precedent; corrected that checklist
+  wording above.
+
+  Implemented by a clean-context agent from a fully-specified brief; the
+  agent hit its own session limit mid-task (writing the client helper's
+  test), leaving the branch with substantial uncommitted, mostly-complete
+  work but no commits. I resumed directly: found and fixed a dependency
+  mismatch (the code used `cookie` v1's `parse`/`serialize` names, but
+  `package.json` pinned v2, which dropped them for `parseCookie`/
+  `stringifySetCookie` — pinned to `^1.1.1`, the last line exporting both old
+  and new names, rather than rewrite already-correct code against the new
+  API) and a vitest config using `environmentMatchGlobs`, an option removed
+  in the installed vitest version (replaced with a per-file
+  `// @vitest-environment jsdom` docblock on the client test, needed since
+  the client helper's tests need `document`/`fetch` globals but the
+  server-side tests run faster under the default `node` environment). Also
+  caught, before any Opus pass, `verifyState`'s key-length validation
+  sitting inside its try/catch — the exact swallowed-misconfiguration bug
+  class already fixed once this session in `verifyOneTimeToken` — and moved
+  it outside, with a regression test.
+
+  An Opus pass then found two more real gaps, both fixed: `callback.ts` and
+  `refresh.ts` used the auth service's response fields with no runtime
+  check, so a malformed or empty 2xx response would corrupt the refresh
+  cookie to the literal string `"undefined"` or crash cookie serialization
+  on a `NaN` `Max-Age` instead of failing cleanly — added
+  `assertSessionTokens()`, mapped to a `502` on failure; and `config.ts`'s
+  integer parsing accepted any finite number (including fractional or
+  negative), contradicting its own "fail loudly at startup" design and
+  instead failing later inside the `cookie` package's own validation —
+  tightened to require a non-negative integer. All 67 `reference-bff` tests
+  (plus the rest of the workspace) passing, `lint`/`tsc --noEmit` clean, the
+  `tsup` dual-build verified by actually `require()`-ing the CJS output and
+  dynamically `import()`-ing the ESM output for both the main and `./client`
+  entry points, and 3 repeated full test runs to check for flakiness.
