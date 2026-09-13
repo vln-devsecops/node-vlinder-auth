@@ -1,0 +1,63 @@
+{
+  "name": "@vln-devsecops/reference-bff",
+  "license": "MIT",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Reference Backend-For-Frontend for auth.<zone> adopters: PKCE + encrypted state, refresh-token cookie handling, single-flighted refresh, double-submit CSRF, and /sudo, /whoami, /logout relays. See doc/vendor-neutral-auth.md.",
+  "files": [
+    "dist/"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./client": {
+      "import": {
+        "types": "./dist/client.d.ts",
+        "default": "./dist/client.js"
+      },
+      "require": {
+        "types": "./dist/client.d.cts",
+        "default": "./dist/client.cjs"
+      }
+    }
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && tsup",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "cookie": "^1.1.1",
+    "express": "^5.2.1",
+    "jose": "^6.2.10"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
+    "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^5.0.0",
+    "jsdom": "^30.0.1",
+    "supertest": "^7.2.2",
+    "tsup": "^8.5.1",
+    "typescript": "~5.7.2",
+    "vitest": "^5.0.0"
+  }
+}

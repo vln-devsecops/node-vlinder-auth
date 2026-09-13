@@ -201,14 +201,14 @@ expected issuer is configuration, not a constant").
 
 ### 8. Reference BFF — Sonnet / **Opus (security-critical)**
 
-- [ ] A minimal but fully functional BFF in this repo: PKCE minting, encrypted
+- [x] A minimal but fully functional BFF in this repo: PKCE minting, encrypted
       `state`, the callback exchange, the refresh-token cookie, and relays for
       `/sudo`, `/whoami` and `/logout`.
-- [ ] A front-end client helper that single-flights refreshes.
-- [ ] Configuration switch for whether the access token reaches JS,
+- [x] A front-end client helper that single-flights refreshes.
+- [x] Configuration switch for whether the access token reaches JS,
       **defaulting to cookie-only**. Opting in is for apps that must send it
       cross-origin as a bearer token.
-- [ ] **Double-submit CSRF protection on by default**, not deferred until a
+- [x] **Double-submit CSRF protection on by default**, not deferred until a
       form-submittable route exists. A second cookie (`Secure`,
       `SameSite=Strict`, deliberately *not* `HttpOnly`) alongside the
       refresh-token cookie; the client helper echoes it in a custom header on
@@ -218,7 +218,9 @@ expected issuer is configuration, not a constant").
       `modules/aws/vlinder_auth/doc/admin-api-csrf.md` — implement that here,
       always on, with disabling it a documented deviation rather than a
       routine option.
-- [ ] Publish it dual ESM+CJS like the other packages.
+- [x] Publish it dual ESM+CJS. (No other package in this repo actually does
+      this yet — see the Backlog's "Dual ESM+CJS retrofit" entry — so this is
+      the first, not a case of matching existing precedent.)
 
 ### 8a. Double-submit on the admin API — Sonnet / **Opus (security-critical)**
 
@@ -365,6 +367,74 @@ Not scheduled; pick up when the trigger arrives.
   concrete reason the current approach is causing pain — `PutSecretValue`'s
   automatic stage promotion has, so far, been sufficient for this module's
   actual rotation-tolerance needs.
+- **`session.ts`'s `verifySession` can silently swallow a misconfigured
+  signing key.** Its per-candidate `try/catch` treats every exception as
+  "try the next candidate," unlike `shared/dirJwe.ts`'s `verifyDirJwe`
+  (and `reference-bff`'s `stateJwe.ts`), which validate candidate key
+  material *before* the try/catch specifically so a misconfigured key
+  fails loudly instead of looking like an ordinary invalid/expired token —
+  a fix already applied three separate times this project (`oneTimeToken.ts`,
+  `refreshToken.ts`, `reference-bff/stateJwe.ts`) but missed here. Apply the
+  same pattern.
+- **`shared/dirJwe.ts`'s `jwtDecrypt` call doesn't pin its algorithms.**
+  `jose`'s `jwtDecrypt(token, bytes, { currentDate })` lets the JWE's own
+  protected header pick the key-management/content-encryption algorithms
+  rather than the caller restricting them to `dir`/`A256GCM`. A 32-byte raw
+  key is also valid material for `A128CBC-HS256`; passing explicit
+  `keyManagementAlgorithms: ['dir']` and `contentEncryptionAlgorithms:
+  ['A256GCM']` closes the algorithm-confusion gap this leaves open.
+- **`getSecretVersions` fetches `AWSCURRENT`/`AWSPREVIOUS` sequentially, not
+  in parallel.** Every hot-path call (`/identify`, `/password`, `/token`,
+  `/refresh`) pays two serialized, uncached Secrets Manager round-trips
+  instead of one parallel one. `Promise.all` would work identically, since
+  the "does AWSCURRENT exist" check happens after both calls return, not
+  before the second one is issued.
+- **`rotate-secret/handler.ts` has no guard against overlapping
+  invocations.** No idempotency token or locking; two concurrent
+  `PutSecretValue` calls for the same secret (a scheduled run overlapping a
+  manual force-rotate, or a retry after a timeout that actually succeeded)
+  can rotate a secret twice within one window, evicting the `AWSPREVIOUS`
+  value a token still in flight needs — defeating the very tolerance the
+  current+previous candidate-key design exists for.
+- **`rotate_secret`'s IAM policy grants `kms:Decrypt` it never uses.** The
+  handler only calls `GetRandomPassword` and `PutSecretValue`, never reads
+  an existing secret value back, so it needs `GenerateDataKey`/`DescribeKey`
+  but not `Decrypt`. If this Lambda were ever compromised, the excess grant
+  would let an attacker read the plaintext of all three sensitive secrets
+  rather than only being able to overwrite them.
+- **Consumer Cognito app clients don't get the same refresh-token rotation
+  as `auth_site`.** Only `aws_cognito_user_pool_client.auth_site` gained
+  `refresh_token_rotation`/`refresh_token_validity` in step 7; `.consumer`
+  (the app clients other than the auth site itself) are still on Cognito's
+  undocumented default lifetime with no reuse detection. Worth deciding
+  whether consumer clients are in scope for the same posture.
+- **Terraform `required_version` allows versions too old for a
+  cross-variable validation block already in use.** `versions.tf` declares
+  `>= 1.6.0`, but `variables.tf`'s `clients` validation cross-references
+  `var.tenancy_mode`/`var.tenants`, a feature requiring Terraform >= 1.9.
+  An adopter on 1.6-1.8 gets a confusing hard error (or worse, a
+  silently-skipped validation) instead of the intended message.
+- **Leftover `time` provider requirement.** `versions.tf` still declares
+  the `time` provider even though the diff that removed
+  `time_rotating.auth_session_signing_key` (step 7's rotation rework) was
+  its only consumer.
+- **Deploy the reference BFF (`packages/reference-bff`) as a Lambda.**
+  `createApp(config)` returns a plain Express `Application`, decoupled from
+  `server.ts`'s `app.listen()` — nothing in the routes, CSRF middleware, or
+  cookie handling depends on a real socket, streaming, or a long-lived
+  connection. A thin adapter (`serverless-http` or
+  `@vendia/serverless-express`) wrapping `createApp(loadConfig())` behind an
+  API Gateway proxy integration should work with no changes to this
+  package's own code — trigger for that path: an adopter wants exactly this
+  and it's worth writing up as a documented deployment option. Distinct
+  from, and not to be confused with, rewriting it as a **native** handler
+  matching `lambda-src/auth-api/handler.ts`'s own style (hand-rolled
+  `APIGatewayProxyEventV2` routing, no Express dependency) — that would mean
+  dropping Express and reimplementing routing, the CSRF middleware, and
+  cookie parsing/serialization to match those conventions, a real rewrite,
+  not an adapter. No trigger for that path yet; the reference implementation
+  is deliberately framework-generic (Express) so any adopter, not just ones
+  on Lambda, can read and adapt it.
 
 ## Progress log
 
@@ -1073,3 +1143,90 @@ done alongside what was.
   now called out with a comment. All 318 lambda-src tests, lint, and
   `tsc --noEmit` stayed clean throughout, including three repeated full test
   runs to check for flakiness.
+
+- **2026-09-13** — Step 8 (reference BFF). New package
+  `@vln-devsecops/reference-bff`: `GET /login` (mints PKCE material and this
+  BFF's own encrypted `state`, `302`s to `/authorize`), `GET /login/callback`
+  (decrypts `state`, exchanges the one-time token server-to-server, mints the
+  refresh-token/CSRF/access-token cookies), `POST /refresh` (CSRF-protected,
+  rotates all three cookies together, clears them and `401`s on an upstream
+  `401`), and thin passthrough relays for `/sudo`/`/whoami`/`/logout` (these
+  `404` today, since steps 9/10 haven't built the auth-service side yet —
+  expected, tested against a mocked upstream client). Nothing in this repo
+  established an HTTP framework precedent; asked rlc, who chose Express.
+  Double-submit CSRF is this package's first real implementation of the
+  design in `terraform-modules`'
+  `modules/aws/vlinder_auth/doc/admin-api-csrf.md` (not yet built anywhere
+  before this) — step 8a will bring the admin API into line with what's
+  built here. That doc leaves "session id" abstract; concretely, for this
+  BFF, it's the refresh-token cookie's own opaque value, so the CSRF cookie
+  naturally rotates in lockstep with it. A separate `./client` export (zero
+  Node-only imports) ships the single-flighting refresh helper. Published
+  dual ESM+CJS via `tsup` — despite the checklist's "like the other
+  packages" wording, no package in this repo actually does dual-format
+  publishing yet (confirmed while researching: `lambda-src` is CJS-only for
+  Lambda-runtime reasons, `ui-auth` is ESM-only via a bare `main`), so this
+  is the first, not a case of matching precedent; corrected that checklist
+  wording above.
+
+  Implemented by a clean-context agent from a fully-specified brief; the
+  agent hit its own session limit mid-task (writing the client helper's
+  test), leaving the branch with substantial uncommitted, mostly-complete
+  work but no commits. I resumed directly: found and fixed a dependency
+  mismatch (the code used `cookie` v1's `parse`/`serialize` names, but
+  `package.json` pinned v2, which dropped them for `parseCookie`/
+  `stringifySetCookie` — pinned to `^1.1.1`, the last line exporting both old
+  and new names, rather than rewrite already-correct code against the new
+  API) and a vitest config using `environmentMatchGlobs`, an option removed
+  in the installed vitest version (replaced with a per-file
+  `// @vitest-environment jsdom` docblock on the client test, needed since
+  the client helper's tests need `document`/`fetch` globals but the
+  server-side tests run faster under the default `node` environment). Also
+  caught, before any Opus pass, `verifyState`'s key-length validation
+  sitting inside its try/catch — the exact swallowed-misconfiguration bug
+  class already fixed once this session in `verifyOneTimeToken` — and moved
+  it outside, with a regression test.
+
+  An Opus pass then found two more real gaps, both fixed: `callback.ts` and
+  `refresh.ts` used the auth service's response fields with no runtime
+  check, so a malformed or empty 2xx response would corrupt the refresh
+  cookie to the literal string `"undefined"` or crash cookie serialization
+  on a `NaN` `Max-Age` instead of failing cleanly — added
+  `assertSessionTokens()`, mapped to a `502` on failure; and `config.ts`'s
+  integer parsing accepted any finite number (including fractional or
+  negative), contradicting its own "fail loudly at startup" design and
+  instead failing later inside the `cookie` package's own validation —
+  tightened to require a non-negative integer. All 67 `reference-bff` tests
+  (plus the rest of the workspace) passing, `lint`/`tsc --noEmit` clean, the
+  `tsup` dual-build verified by actually `require()`-ing the CJS output and
+  dynamically `import()`-ing the ESM output for both the main and `./client`
+  entry points, and 3 repeated full test runs to check for flakiness.
+
+  A further, broader Opus review pass ("for completeness") caught a real
+  vulnerability the first pass missed: `state` carried only the PKCE
+  `code_verifier` and `issuedAt`, with nothing binding it to the browser that
+  started the flow. RFC 6749 §10.12 requires session-bound state for exactly
+  this reason — without it, an attacker can complete a real login as
+  themselves, capture the resulting `token`+`state` pair, and lure a victim
+  into visiting that exact callback URL; PKCE alone doesn't stop this, since
+  the attacker's own `code_verifier` is correctly embedded and matches.
+  The BFF would decrypt and exchange it successfully and set session cookies
+  on the *victim's* browser for the *attacker's* account — a silent
+  login-CSRF / session-swap. Fixed by adding a `csrfNonce` to the state
+  JWE's payload, mirrored in a new short-lived, `SameSite=Lax` cookie
+  (`vln_bff_login_csrf` — `Lax`, not this codebase's usual `Strict`, since it
+  must survive the top-level cross-site navigation the browser makes when
+  the auth service redirects back to `/login/callback`) set at `GET /login`
+  and compared, constant-time, against the decrypted state's nonce at
+  `/login/callback`. Also fixed two smaller findings from the same pass:
+  `config.ts` didn't validate `STATE_JWE_KEY`'s byte length at startup
+  (only lazily, on the first request), and `relay.ts` always forwarded a
+  body for POST relays even when the client sent none (`express.json()`
+  defaults `req.body` to `{}`, not `undefined`), sending an unintended empty
+  JSON body to `/logout`. That same review pass also surfaced real findings
+  in already-*merged* code from earlier steps (algorithm-pinning on
+  `shared/dirJwe.ts`'s `jwtDecrypt` call, sequential rather than parallel
+  Secrets Manager calls in `getSecretVersions`, an excess `kms:Decrypt`
+  grant on the `rotate_secret` Lambda's IAM policy, and others) — out of
+  scope for this PR since they're not part of its diff; recorded in the
+  Backlog below rather than reopened here.

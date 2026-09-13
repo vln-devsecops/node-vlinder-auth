@@ -1,0 +1,91 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { loadConfig } from './config'
+
+const REQUIRED_ENV = {
+  AUTH_SERVICE_BASE_URL: 'https://auth.example.com',
+  RP_CLIENT_ID: 'client-1',
+  RP_REDIRECT_URI: 'https://app.example.com/login/callback',
+  STATE_JWE_KEY: 'a'.repeat(32),
+  CSRF_SECRET: 'csrf-secret',
+}
+
+const ENV_KEYS = [...Object.keys(REQUIRED_ENV), 'ACCESS_TOKEN_DELIVERY', 'REFRESH_COOKIE_MAX_AGE_SECONDS', 'PORT']
+
+describe('loadConfig', () => {
+  const original: Record<string, string | undefined> = {}
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      original[key] = process.env[key]
+      delete process.env[key]
+    }
+    Object.assign(process.env, REQUIRED_ENV)
+  })
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (original[key] === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = original[key]
+      }
+    }
+  })
+
+  it('loads required values and applies defaults', () => {
+    const config = loadConfig()
+    expect(config.authServiceBaseUrl).toBe('https://auth.example.com')
+    expect(config.rpClientId).toBe('client-1')
+    expect(config.accessTokenDelivery).toBe('cookie')
+    expect(config.refreshCookieMaxAgeSeconds).toBe(2592000)
+    expect(config.port).toBe(3000)
+  })
+
+  it('strips a trailing slash from the auth service base URL', () => {
+    process.env.AUTH_SERVICE_BASE_URL = 'https://auth.example.com/'
+    expect(loadConfig().authServiceBaseUrl).toBe('https://auth.example.com')
+  })
+
+  it('strips multiple trailing slashes', () => {
+    process.env.AUTH_SERVICE_BASE_URL = 'https://auth.example.com///'
+    expect(loadConfig().authServiceBaseUrl).toBe('https://auth.example.com')
+  })
+
+  it('throws loudly, naming the variable, when a required var is missing', () => {
+    delete process.env.RP_CLIENT_ID
+    expect(() => loadConfig()).toThrow(/RP_CLIENT_ID/)
+  })
+
+  it('rejects a STATE_JWE_KEY of the wrong byte length at load time, not on the first /login request', () => {
+    process.env.STATE_JWE_KEY = 'too-short'
+    expect(() => loadConfig()).toThrow(/STATE_JWE_KEY must be exactly 32 bytes/)
+  })
+
+  it('respects ACCESS_TOKEN_DELIVERY=body', () => {
+    process.env.ACCESS_TOKEN_DELIVERY = 'body'
+    expect(loadConfig().accessTokenDelivery).toBe('body')
+  })
+
+  it('rejects an invalid ACCESS_TOKEN_DELIVERY value', () => {
+    process.env.ACCESS_TOKEN_DELIVERY = 'nonsense'
+    expect(() => loadConfig()).toThrow(/ACCESS_TOKEN_DELIVERY/)
+  })
+
+  it('respects a custom REFRESH_COOKIE_MAX_AGE_SECONDS', () => {
+    process.env.REFRESH_COOKIE_MAX_AGE_SECONDS = '60'
+    expect(loadConfig().refreshCookieMaxAgeSeconds).toBe(60)
+  })
+
+  it('rejects a non-integer REFRESH_COOKIE_MAX_AGE_SECONDS at startup, not at the first request', () => {
+    // Regression: a fractional value used to pass loadConfig() and only fail
+    // later, deep inside the `cookie` package's own serialize(), the first
+    // time a route actually minted a cookie with it.
+    process.env.REFRESH_COOKIE_MAX_AGE_SECONDS = '100.5'
+    expect(() => loadConfig()).toThrow(/REFRESH_COOKIE_MAX_AGE_SECONDS must be a non-negative integer/)
+  })
+
+  it('rejects a negative PORT', () => {
+    process.env.PORT = '-1'
+    expect(() => loadConfig()).toThrow(/PORT must be a non-negative integer/)
+  })
+})
