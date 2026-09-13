@@ -207,9 +207,10 @@ All handlers are consumed from the `@vln-devsecops/auth-lambda` package:
   this package), not a request. Generates a new random value for whichever
   Secrets Manager secret its event names and writes it via `PutSecretValue`,
   which Secrets Manager itself promotes to `AWSCURRENT` while demoting the
-  previous value to `AWSPREVIOUS` — the versioning the session-signing key
-  and the RP-handoff one-time-token key both already tolerate a rotation
-  boundary against. One handler, reused by a separate schedule per secret;
+  previous value to `AWSPREVIOUS` — the versioning the session-signing key,
+  the RP-handoff one-time-token key, and the refresh-token JWE key all
+  already tolerate a rotation boundary against. One handler, reused by a
+  separate schedule per secret;
   which secret and what password length arrive as the event payload, never
   hardcoded here.
 

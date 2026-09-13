@@ -21,11 +21,13 @@ import {
   InvalidIdentifierError,
 } from './handlers/identify'
 import { AuthFailedError, InvalidSessionError, password, UnverifiedAccountError } from './handlers/password'
+import { InvalidRefreshTokenError, refresh } from './handlers/refresh'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
 import { exchangeToken, InvalidOneTimeTokenError, PkceMismatchError } from './handlers/token'
 import { CognitoClientError } from './cognitoError'
 import type { OneTimeTokenKey } from './oneTimeToken'
+import type { RefreshTokenKey } from './refreshToken'
 import { InvalidVerificationCodeError } from './verificationCodeError'
 import {
   AS_SESSION_COOKIE,
@@ -90,6 +92,7 @@ interface RouteDeps {
    */
   sessionSigningKeySecretId: string
   oneTimeTokenKeySecretId: string
+  refreshTokenKeySecretId: string
   cognitoClient: CognitoIdentityProviderClient
   ddbDocClient: DynamoDBDocumentClient
   sesClient: SESv2Client
@@ -101,6 +104,7 @@ interface RouteDeps {
   verificationCodeTtlSeconds: number
   verificationCodeMaxAttempts: number
   fromAddress: string
+  refreshTokenTtlSeconds: number
 }
 
 /** Maps a handler-thrown error to its HTTP response, or returns undefined to re-throw. */
@@ -115,6 +119,11 @@ function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | unde
     return json(401, { error: error.message })
   }
   if (error instanceof UnverifiedAccountError) {
+    return json(401, { error: error.message })
+  }
+  // 401 (not the /token exchange's 400) so the BFF can clear its cookie and
+  // propagate -- see doc/vendor-neutral-auth.md's Refresh section.
+  if (error instanceof InvalidRefreshTokenError) {
     return json(401, { error: error.message })
   }
   if (error instanceof InvalidVerificationCodeError) {
@@ -153,6 +162,7 @@ async function routeRequest(
   const {
     sessionSigningKeySecretId,
     oneTimeTokenKeySecretId,
+    refreshTokenKeySecretId,
     cognitoClient,
     ddbDocClient,
     sesClient,
@@ -164,6 +174,7 @@ async function routeRequest(
     verificationCodeTtlSeconds,
     verificationCodeMaxAttempts,
     fromAddress,
+    refreshTokenTtlSeconds,
   } = deps
 
   switch (event.routeKey) {
@@ -381,13 +392,60 @@ async function routeRequest(
     }
 
     case 'POST /api/v1/auth/token': {
-      const oneTimeTokenKeys: OneTimeTokenKey[] = (await getSecretVersions(oneTimeTokenKeySecretId)).map(
-        (version) => ({ keyId: version.versionId, key: version.value }),
-      )
+      // Verifying the one-time token needs current+previous (rotation
+      // boundary, see oneTimeToken.ts); minting the wrapped refresh token
+      // only ever needs the current refresh-token key -- same reasoning as
+      // the one-time-token key's own minting side in /password above.
+      const [oneTimeTokenVersions, currentRefreshTokenKey] = await Promise.all([
+        getSecretVersions(oneTimeTokenKeySecretId),
+        getSecretVersion(refreshTokenKeySecretId, 'AWSCURRENT'),
+      ])
+      if (!currentRefreshTokenKey) {
+        throw new Error(`Secret ${refreshTokenKeySecretId} has no AWSCURRENT version`)
+      }
+      const oneTimeTokenKeys: OneTimeTokenKey[] = oneTimeTokenVersions.map((version) => ({
+        keyId: version.versionId,
+        key: version.value,
+      }))
+      const refreshTokenKey: RefreshTokenKey = {
+        keyId: currentRefreshTokenKey.versionId,
+        key: currentRefreshTokenKey.value,
+      }
       const result = await exchangeToken({
         token: bodyString(body.token),
         codeVerifier: bodyString(body.code_verifier),
         keys: oneTimeTokenKeys,
+        refreshTokenKey,
+        refreshTokenTtlSeconds,
+      })
+      return json(200, result)
+    }
+
+    case 'POST /api/v1/auth/refresh': {
+      // Verifying the incoming JWE needs current+previous (rotation
+      // boundary tolerance, same reasoning as /password's identify-session
+      // check); the mint key for the rotated replacement is always the
+      // current one (see refresh.ts's mintKey doc comment). Fetched once and
+      // reused for both, rather than two separate calls like /token above,
+      // since both verifyKeys and mintKey are derived from the same
+      // current+previous fetch here.
+      const refreshTokenVersions = await getSecretVersions(refreshTokenKeySecretId)
+      const verifyKeys: RefreshTokenKey[] = refreshTokenVersions.map((version) => ({
+        keyId: version.versionId,
+        key: version.value,
+      }))
+      // getSecretVersions returns current first (see its doc comment in
+      // shared/secrets.ts) -- relying on that ordering here rather than a
+      // second, redundant getSecretVersion('AWSCURRENT') call.
+      const mintKey: RefreshTokenKey = verifyKeys[0]
+      const result = await refresh({
+        refreshToken: bodyString(body.refresh_token),
+        cognitoClient,
+        clientId,
+        userPoolId,
+        verifyKeys,
+        mintKey,
+        refreshTokenTtlSeconds,
       })
       return json(200, result)
     }
@@ -411,6 +469,7 @@ export async function handler(
   const deps: RouteDeps = {
     sessionSigningKeySecretId: requireEnv('SESSION_SIGNING_KEY_SECRET_ID'),
     oneTimeTokenKeySecretId: requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID'),
+    refreshTokenKeySecretId: requireEnv('REFRESH_TOKEN_KEY_SECRET_ID'),
     cognitoClient: getCognitoClient(),
     ddbDocClient: getDdbDocClient(),
     sesClient: getSesClient(),
@@ -422,6 +481,12 @@ export async function handler(
     verificationCodeTtlSeconds: Number(requireEnv('VERIFICATION_CODE_TTL_SECONDS')),
     verificationCodeMaxAttempts: Number(requireEnv('VERIFICATION_CODE_MAX_ATTEMPTS')),
     fromAddress: requireEnv('SES_FROM_ADDRESS'),
+    // Sourced from an env var, not hardcoded, because it must move in
+    // lockstep with the Terraform-side Cognito refresh_token_validity
+    // setting (coordinated separately in terraform-modules) -- this module
+    // only takes it as a parameter, same as VERIFICATION_CODE_TTL_SECONDS
+    // above.
+    refreshTokenTtlSeconds: Number(requireEnv('REFRESH_TOKEN_TTL_SECONDS')),
   }
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 

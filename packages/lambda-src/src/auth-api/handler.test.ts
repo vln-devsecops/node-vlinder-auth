@@ -26,6 +26,7 @@ import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { handler } from './handler'
 import type { OneTimeTokenKey } from './oneTimeToken'
+import { mintRefreshToken, type RefreshTokenKey, verifyRefreshToken } from './refreshToken'
 import {
   AS_SESSION_COOKIE,
   AUTH_METHOD_COOKIE,
@@ -45,6 +46,8 @@ const ONE_TIME_TOKEN_KEY: OneTimeTokenKey = {
 // A distinct 32-byte value standing in for the key that was AWSCURRENT
 // before the most recent rotation -- used by the rotation-boundary test.
 const PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL = 'test-previous-one-time-token-key'.slice(0, 32)
+const REFRESH_TOKEN_KEY_MATERIAL = 'test-refresh-token-key-32-bytes-'.slice(0, 32)
+const REFRESH_TOKEN_KEY: RefreshTokenKey = { keyId: 'refresh-version-current', key: REFRESH_TOKEN_KEY_MATERIAL }
 const nowSeconds = Math.floor(Date.now() / 1000)
 const FUTURE_EXPIRY = nowSeconds + 600
 
@@ -67,6 +70,12 @@ beforeEach(() => {
       // the current value -- getSecret never passes VersionStage at all.
       return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
     }
+    if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:refresh-token') {
+      if (input.VersionStage === 'AWSPREVIOUS') {
+        throw new ResourceNotFoundException({ message: 'not found', $metadata: {} })
+      }
+      return { SecretString: REFRESH_TOKEN_KEY_MATERIAL, VersionId: 'refresh-version-current' }
+    }
     // The session-signing-key secret: /password's getSecretVersions call
     // needs a VersionId even though there's no AWSPREVIOUS in most of these
     // tests (getSecretVersion signals "doesn't exist" via
@@ -80,6 +89,7 @@ beforeEach(() => {
   })
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
   process.env.ONE_TIME_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token'
+  process.env.REFRESH_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:refresh-token'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
   process.env.TENANTS_TABLE_NAME = 'tenants-table'
@@ -88,11 +98,13 @@ beforeEach(() => {
   process.env.VERIFICATION_CODE_TTL_SECONDS = '600'
   process.env.VERIFICATION_CODE_MAX_ATTEMPTS = '5'
   process.env.SES_FROM_ADDRESS = 'no-reply@vlinder.example'
+  process.env.REFRESH_TOKEN_TTL_SECONDS = '2592000'
 })
 
 afterEach(() => {
   delete process.env.SESSION_SIGNING_KEY_SECRET_ID
   delete process.env.ONE_TIME_TOKEN_KEY_SECRET_ID
+  delete process.env.REFRESH_TOKEN_KEY_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
   delete process.env.TENANTS_TABLE_NAME
@@ -101,6 +113,7 @@ afterEach(() => {
   delete process.env.VERIFICATION_CODE_TTL_SECONDS
   delete process.env.VERIFICATION_CODE_MAX_ATTEMPTS
   delete process.env.SES_FROM_ADDRESS
+  delete process.env.REFRESH_TOKEN_TTL_SECONDS
 })
 
 function event(
@@ -453,7 +466,7 @@ describe('auth-api handler', () => {
     expect(res.statusCode).toBe(400)
   })
 
-  it('POST /api/v1/auth/token exchanges a valid one-time token and code_verifier for the embedded tokens', async () => {
+  it('POST /api/v1/auth/token exchanges a valid one-time token and code_verifier for the embedded tokens, wrapping the refresh token as a JWE', async () => {
     const { createHash } = await import('node:crypto')
     const { mintOneTimeToken } = await import('./oneTimeToken')
     const codeVerifier = 'a-known-code-verifier-string'
@@ -474,12 +487,14 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
-    expect(JSON.parse(res.body!)).toEqual({
-      accessToken: 'a',
-      idToken: 'i',
-      refreshToken: 'r',
-      expiresAt: 123,
-    })
+    const body = JSON.parse(res.body!)
+    expect(body.accessToken).toBe('a')
+    expect(body.idToken).toBe('i')
+    expect(body.expiresAt).toBe(123)
+    // The raw Cognito refresh token 'r' must never leave the Lambda as-is.
+    expect(body.refreshToken).not.toBe('r')
+    const decrypted = await verifyRefreshToken(body.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({ cognitoRefreshToken: 'r', elevatedGrants: [] })
   })
 
   it('POST /api/v1/auth/token 400s on a mismatched code_verifier', async () => {
@@ -528,12 +543,12 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
-    expect(JSON.parse(res.body!)).toEqual({
-      accessToken: 'a',
-      idToken: 'i',
-      refreshToken: 'r',
-      expiresAt: 123,
-    })
+    const body = JSON.parse(res.body!)
+    expect(body.accessToken).toBe('a')
+    expect(body.idToken).toBe('i')
+    expect(body.expiresAt).toBe(123)
+    const decrypted = await verifyRefreshToken(body.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({ cognitoRefreshToken: 'r', elevatedGrants: [] })
   })
 
   it('POST /api/v1/auth/token still works with only a current key when Secrets Manager has no AWSPREVIOUS yet (a fresh, never-rotated deployment)', async () => {
@@ -544,6 +559,9 @@ describe('auth-api handler', () => {
       }
       if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
         return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
+      }
+      if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:refresh-token') {
+        return { SecretString: REFRESH_TOKEN_KEY_MATERIAL, VersionId: 'refresh-version-current' }
       }
       return { SecretString: KEY, VersionId: 'session-key-version-current' }
     })
@@ -568,12 +586,12 @@ describe('auth-api handler', () => {
     )
 
     expect(res.statusCode).toBe(200)
-    expect(JSON.parse(res.body!)).toEqual({
-      accessToken: 'a',
-      idToken: 'i',
-      refreshToken: 'r',
-      expiresAt: 123,
-    })
+    const body = JSON.parse(res.body!)
+    expect(body.accessToken).toBe('a')
+    expect(body.idToken).toBe('i')
+    expect(body.expiresAt).toBe(123)
+    const decrypted = await verifyRefreshToken(body.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({ cognitoRefreshToken: 'r', elevatedGrants: [] })
   })
 
   it('POST /api/v1/auth/password still mints a working one-time token when Secrets Manager has no AWSPREVIOUS yet', async () => {
@@ -643,6 +661,69 @@ describe('auth-api handler', () => {
     expect(cookieValue(methodCookie)).toBe('local')
     const sessionCookie = res.cookies!.find((c) => c.startsWith(AS_SESSION_COOKIE))!
     expect(cookieValue(sessionCookie)).toBe('a')
+  })
+
+  it('POST /api/v1/auth/refresh exchanges a valid refresh JWE for fresh tokens and a rotated JWE', async () => {
+    cognitoMock.on(AdminInitiateAuthCommand).resolves({
+      AuthenticationResult: {
+        AccessToken: 'new-access',
+        IdToken: 'new-id',
+        RefreshToken: 'new-cognito-refresh-token',
+        ExpiresIn: 3600,
+      },
+    })
+    const incoming = await mintRefreshToken(
+      { cognitoRefreshToken: 'old-cognito-refresh-token', elevatedGrants: [] },
+      REFRESH_TOKEN_KEY,
+      2_592_000,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/refresh', { body: { refresh_token: incoming } }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.body!)
+    expect(body.accessToken).toBe('new-access')
+    expect(body.idToken).toBe('new-id')
+    expect(body.refreshToken).not.toBe(incoming)
+
+    const call = cognitoMock.commandCalls(AdminInitiateAuthCommand)[0]
+    expect(call.args[0].input).toMatchObject({
+      UserPoolId: 'us-east-1_example',
+      ClientId: 'client-abc',
+      AuthFlow: 'REFRESH_TOKEN_AUTH',
+      AuthParameters: { REFRESH_TOKEN: 'old-cognito-refresh-token' },
+    })
+
+    const decrypted = await verifyRefreshToken(body.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({ cognitoRefreshToken: 'new-cognito-refresh-token', elevatedGrants: [] })
+  })
+
+  it('POST /api/v1/auth/refresh 401s on an invalid/tampered refresh JWE', async () => {
+    const res = await handler(
+      event('POST /api/v1/auth/refresh', { body: { refresh_token: 'not-a-real-jwe' } }),
+    )
+
+    expect(res.statusCode).toBe(401)
+    expect(cognitoMock.commandCalls(AdminInitiateAuthCommand)).toHaveLength(0)
+  })
+
+  it('POST /api/v1/auth/refresh 401s when Cognito rejects the underlying refresh token', async () => {
+    cognitoMock
+      .on(AdminInitiateAuthCommand)
+      .rejects(new NotAuthorizedException({ message: 'Refresh Token has been revoked', $metadata: {} }))
+    const incoming = await mintRefreshToken(
+      { cognitoRefreshToken: 'revoked-cognito-refresh-token', elevatedGrants: [] },
+      REFRESH_TOKEN_KEY,
+      2_592_000,
+    )
+
+    const res = await handler(
+      event('POST /api/v1/auth/refresh', { body: { refresh_token: incoming } }),
+    )
+
+    expect(res.statusCode).toBe(401)
   })
 
   it('404s an unrecognized route', async () => {

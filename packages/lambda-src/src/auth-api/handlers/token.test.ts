@@ -1,16 +1,22 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { mintOneTimeToken, type OneTimeTokenKey } from '../oneTimeToken'
+import { type RefreshTokenKey, verifyRefreshToken } from '../refreshToken'
 import { exchangeToken, InvalidOneTimeTokenError, PkceMismatchError } from './token'
 
 const KEY: OneTimeTokenKey = { keyId: 'current-key-id', key: '01234567890123456789012345678901'.slice(0, 32) }
+const REFRESH_TOKEN_KEY: RefreshTokenKey = {
+  keyId: 'refresh-key-id',
+  key: '11111111111111111111111111111111'.slice(0, 32),
+}
+const REFRESH_TOKEN_TTL_SECONDS = 2_592_000
 const CODE_VERIFIER = 'a-known-code-verifier-string'
 const CODE_CHALLENGE = createHash('sha256').update(CODE_VERIFIER).digest('base64url')
 
 const TOKENS = {
   accessToken: 'access-token',
   idToken: 'id-token',
-  refreshToken: 'refresh-token',
+  refreshToken: 'raw-cognito-refresh-token',
   expiresAt: 1_000_003_600_000,
 }
 
@@ -34,12 +40,29 @@ function oneTimeTokenFor(
 }
 
 describe('exchangeToken', () => {
-  it('returns the embedded tokens when the one-time token and PKCE verifier both check out', async () => {
+  it('returns the embedded access/id tokens and a JWE-wrapped refresh token when the one-time token and PKCE verifier both check out', async () => {
     const token = await oneTimeTokenFor()
 
-    const result = await exchangeToken({ token, codeVerifier: CODE_VERIFIER, keys: [KEY] })
+    const result = await exchangeToken({
+      token,
+      codeVerifier: CODE_VERIFIER,
+      keys: [KEY],
+      refreshTokenKey: REFRESH_TOKEN_KEY,
+      refreshTokenTtlSeconds: REFRESH_TOKEN_TTL_SECONDS,
+    })
 
-    expect(result).toEqual(TOKENS)
+    expect(result.accessToken).toBe(TOKENS.accessToken)
+    expect(result.idToken).toBe(TOKENS.idToken)
+    expect(result.expiresAt).toBe(TOKENS.expiresAt)
+    // The raw Cognito refresh token must never leave the Lambda as-is -- it
+    // is wrapped in this Lambda's own JWE (see doc/vendor-neutral-auth.md's
+    // Token model). Assert by decrypting it back, not by string comparison.
+    expect(result.refreshToken).not.toBe(TOKENS.refreshToken)
+    const decrypted = await verifyRefreshToken(result.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({
+      cognitoRefreshToken: TOKENS.refreshToken,
+      elevatedGrants: [],
+    })
   })
 
   it('rejects an expired one-time token', async () => {
@@ -47,7 +70,14 @@ describe('exchangeToken', () => {
     const token = await oneTimeTokenFor(CODE_CHALLENGE, 60, issuedAt)
 
     await expect(
-      exchangeToken({ token, codeVerifier: CODE_VERIFIER, keys: [KEY], now: issuedAt + 61_000 }),
+      exchangeToken({
+        token,
+        codeVerifier: CODE_VERIFIER,
+        keys: [KEY],
+        refreshTokenKey: REFRESH_TOKEN_KEY,
+        refreshTokenTtlSeconds: REFRESH_TOKEN_TTL_SECONDS,
+        now: issuedAt + 61_000,
+      }),
     ).rejects.toThrow(InvalidOneTimeTokenError)
   })
 
@@ -63,7 +93,13 @@ describe('exchangeToken', () => {
     const tampered = [parts[0], parts[1], parts[2], tamperedCiphertext, parts[4]].join('.')
 
     await expect(
-      exchangeToken({ token: tampered, codeVerifier: CODE_VERIFIER, keys: [KEY] }),
+      exchangeToken({
+        token: tampered,
+        codeVerifier: CODE_VERIFIER,
+        keys: [KEY],
+        refreshTokenKey: REFRESH_TOKEN_KEY,
+        refreshTokenTtlSeconds: REFRESH_TOKEN_TTL_SECONDS,
+      }),
     ).rejects.toThrow(InvalidOneTimeTokenError)
   })
 
@@ -71,7 +107,13 @@ describe('exchangeToken', () => {
     const token = await oneTimeTokenFor()
 
     await expect(
-      exchangeToken({ token, codeVerifier: 'not-the-right-verifier', keys: [KEY] }),
+      exchangeToken({
+        token,
+        codeVerifier: 'not-the-right-verifier',
+        keys: [KEY],
+        refreshTokenKey: REFRESH_TOKEN_KEY,
+        refreshTokenTtlSeconds: REFRESH_TOKEN_TTL_SECONDS,
+      }),
     ).rejects.toThrow(PkceMismatchError)
   })
 
@@ -90,8 +132,14 @@ describe('exchangeToken', () => {
       token,
       codeVerifier: CODE_VERIFIER,
       keys: [KEY, previousKey],
+      refreshTokenKey: REFRESH_TOKEN_KEY,
+      refreshTokenTtlSeconds: REFRESH_TOKEN_TTL_SECONDS,
     })
 
-    expect(result).toEqual(TOKENS)
+    expect(result.accessToken).toBe(TOKENS.accessToken)
+    expect(result.idToken).toBe(TOKENS.idToken)
+    expect(result.expiresAt).toBe(TOKENS.expiresAt)
+    const decrypted = await verifyRefreshToken(result.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({ cognitoRefreshToken: TOKENS.refreshToken, elevatedGrants: [] })
   })
 })

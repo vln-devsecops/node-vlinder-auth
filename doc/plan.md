@@ -192,11 +192,11 @@ expected issuer is configuration, not a constant").
 
 ### 7. Refresh: JWE wrapping, rotation, grant container — Sonnet / **Opus**
 
-- [ ] Wrap Cognito's refresh token in a JWE the BFF cannot read; rotate it on
+- [x] Wrap Cognito's refresh token in a JWE the BFF cannot read; rotate it on
       every refresh; enable Cognito rotation with reuse detection.
-- [ ] Carry an `elevatedGrants` list in the payload and decay expired entries
+- [x] Carry an `elevatedGrants` list in the payload and decay expired entries
       on every refresh, before computing the access token's scopes.
-- [ ] `401` on an expired or revoked refresh token, so the BFF can clear its
+- [x] `401` on an expired or revoked refresh token, so the BFF can clear its
       cookie and propagate.
 
 ### 8. Reference BFF — Sonnet / **Opus (security-critical)**
@@ -1009,3 +1009,67 @@ done alongside what was.
   `getSecretVersion(id, 'AWSCURRENT')` too, halving the round-trips for
   every `/password` call. All 291 lambda-src tests, lint, and
   `tsc --noEmit` stayed clean; CI green on PR #109.
+
+- **2026-09-13** — Step 7 (refresh: JWE wrapping, rotation, grant
+  container). `POST /api/v1/auth/refresh` added, mirroring `/token`'s
+  server-to-server, cookie-free contract per
+  [`vendor-neutral-auth.md`](./vendor-neutral-auth.md)'s Layer 1 section:
+  the BFF forwards its opaque refresh-token JWE unmodified and gets back a
+  fresh access/ID token plus a newly-rotated JWE. A third rotatable secret
+  (`REFRESH_TOKEN_KEY_SECRET_ID`) wraps the raw Cognito refresh token in its
+  own `dir`/A256GCM JWE (`refreshToken.ts`), extracted alongside
+  `oneTimeToken.ts` into a shared `shared/dirJwe.ts` helper rather than
+  hand-duplicating the exact same key-length-validation-before-try/catch
+  structure a second time -- that ordering was a real bug caught and fixed
+  earlier in step 6's follow-ups, and duplicating the code risked
+  duplicating the mistake along with it. `/token`'s response, which
+  previously returned Cognito's raw refresh token verbatim, now wraps it the
+  same way before it ever leaves the Lambda. `elevatedGrants` rides inside
+  the refresh token's own payload (per
+  [`rationale.md`](./rationale.md)'s "decay by wall-clock expiry, not a
+  refresh countdown, reusing the rotation that already happens on every
+  refresh rather than adding a store") with a `decayElevatedGrants` pure
+  function that drops expired entries before every re-mint -- nothing
+  populates the list yet (step 9, unbuilt), but the container and its decay
+  logic are built and tested now so step 9 can rely on them without
+  re-deriving or re-reviewing them. `refresh()` maps both an invalid/tampered
+  JWE and a Cognito `NotAuthorizedException` (expired, revoked, or
+  reuse-detected-after-rotation) to the same `InvalidRefreshTokenError` ->
+  401, so a caller can't distinguish "our JWE was bad" from "Cognito
+  rejected the underlying token" -- both just mean log in again. A missing
+  `RefreshToken` in Cognito's `REFRESH_TOKEN_AUTH` response is treated as a
+  distinct, loud configuration error instead: once native rotation is
+  enabled on the app client, Cognito should always return one, so a missing
+  one signals rotation isn't actually on, not a user-facing auth failure.
+
+  In `terraform-modules` (new PR against `feat/rotate-secret-cron`, PR
+  #283, since it needs that branch's shared `rotate_secret`
+  Lambda/scheduler machinery): a third `aws_secretsmanager_secret` +
+  bootstrap seed + `rate(30 days)` rotation schedule, following the
+  one-time-token key's exact pattern; `aws_cognito_user_pool_client
+  .auth_site` gained `refresh_token_rotation { feature = "ENABLED",
+  retry_grace_period_seconds = 60 }` (Cognito's own native rotation with
+  reuse detection -- 60s is AWS's maximum grace period, sized for an
+  ordinary lost-response retry after a rotation that already committed, not
+  for concurrent refreshes, which `rationale.md` already requires
+  single-flighting to prevent) and an explicit `refresh_token_validity = 30`
+  days, matching the Lambda-side `REFRESH_TOKEN_TTL_SECONDS` (2,592,000
+  seconds) so the two move in lockstep. `terraform test`: 80/80 passing;
+  `tflint`/`checkov` clean.
+
+  Both pieces were implemented the same way as prior steps: two independent
+  clean-context agents (one per repo, working from a fully-specified,
+  decision-annotated brief so their interface -- the two env var names --
+  matched without either seeing the other's code), then reviewed and
+  independently re-verified by me before an Opus pass. Opus found three
+  minor issues, all fixed: a redundant `Date.now()` call splitting the
+  rotated refresh token's own `iat`/`exp` from the `expiresAt` returned
+  alongside it (harmless in practice, fixed for consistency); a rotation-
+  boundary test for `/token` that asserted only the access/ID token and
+  missed decrypting the returned refresh token, which would have let a
+  wrapping regression on that specific path through unnoticed; and an
+  undocumented reliance on `getSecretVersions` returning the current version
+  first when deriving the mint key for `/refresh`'s rotated replacement,
+  now called out with a comment. All 318 lambda-src tests, lint, and
+  `tsc --noEmit` stayed clean throughout, including three repeated full test
+  runs to check for flakiness.
