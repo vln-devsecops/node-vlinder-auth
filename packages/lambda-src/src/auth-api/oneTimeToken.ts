@@ -1,4 +1,4 @@
-import { EncryptJWT, jwtDecrypt, type JWTPayload } from 'jose'
+import { type DirJweKey, mintDirJwe, verifyDirJwe } from '../shared/dirJwe'
 
 // The one-time token handed back to the RP's front-end at the end of the RP
 // handoff (see doc/vendor-neutral-auth.md's "Login" sequence diagram). Unlike
@@ -16,7 +16,9 @@ import { EncryptJWT, jwtDecrypt, type JWTPayload } from 'jose'
 // `alg: dir` + `enc: A256GCM` means the token is encrypted directly with a
 // 256-bit symmetric key (no per-token key-wrapping step) held only by this
 // Lambda -- appropriate here because there is exactly one party that ever
-// needs to decrypt it (this Lambda's own /token handler).
+// needs to decrypt it (this Lambda's own /token handler). The actual
+// mint/verify mechanics live in shared/dirJwe.ts, shared with
+// refreshToken.ts, which needs the identical pattern.
 
 export interface OneTimeTokenPayload {
   userId: string
@@ -25,35 +27,10 @@ export interface OneTimeTokenPayload {
   tokens: { accessToken: string; idToken: string; refreshToken: string; expiresAt: number }
 }
 
-export interface OneTimeTokenKey {
-  /**
-   * A stable identifier for this specific key value (the Secrets Manager
-   * version id) -- embedded as the JWE's `kid` for traceability across a
-   * rotation boundary (e.g. "which key version encrypted this one" when
-   * debugging a /token failure). Not used to select a key during
-   * verification -- see verifyOneTimeToken's doc comment.
-   */
-  keyId: string
-  key: string
-}
+export type OneTimeTokenKey = DirJweKey
 
-/**
- * `dir`/A256GCM requires exactly 32 raw key bytes. `jose` throws its own
- * (fairly opaque) error if given the wrong length; this checks up front and
- * fails loudly with a message that names the actual problem, matching this
- * codebase's convention of not letting a misconfigured secret surface as a
- * cryptic low-level exception (see e.g. privileges.ts, tenants.ts).
- */
-function keyBytes(key: string): Uint8Array {
-  const bytes = new TextEncoder().encode(key)
-  if (bytes.length !== 32) {
-    throw new Error(
-      `One-time token key must be exactly 32 bytes for A256GCM, got ${bytes.length}. ` +
-        'Check the value stored under ONE_TIME_TOKEN_KEY_SECRET_ID.',
-    )
-  }
-  return bytes
-}
+const CONTEXT = 'One-time token key'
+const ENV_VAR_NAME = 'ONE_TIME_TOKEN_KEY_SECRET_ID'
 
 /**
  * Encrypts `payload` into a `dir`/A256GCM JWE expiring `ttlSeconds` from now.
@@ -65,12 +42,7 @@ export async function mintOneTimeToken(
   ttlSeconds: number,
   now: number = Date.now(),
 ): Promise<string> {
-  const iat = Math.floor(now / 1000)
-  return await new EncryptJWT(payload as unknown as JWTPayload)
-    .setProtectedHeader({ alg: 'dir', enc: 'A256GCM', kid: key.keyId })
-    .setIssuedAt(iat)
-    .setExpirationTime(iat + ttlSeconds)
-    .encrypt(keyBytes(key.key))
+  return await mintDirJwe(payload, key, ttlSeconds, CONTEXT, ENV_VAR_NAME, now)
 }
 
 /**
@@ -88,33 +60,13 @@ export async function mintOneTimeToken(
  * with the key that was AWSCURRENT a moment ago, and the key has since
  * rotated by the time /token verifies it.
  *
- * This deliberately does not read the token's own `kid` header to pick a
- * single matching key to try. GCM's authentication tag already makes an
- * attempt with the wrong key fail safely and cheaply, so there is no security
- * or meaningful performance benefit to kid-matching -- and it would be one
- * more piece of logic that could itself have a bug. The `kid` embedded by
- * mintOneTimeToken exists purely for operator traceability/debugging (e.g.
- * "which key version encrypted this one"), not as part of the verification
- * algorithm.
+ * See shared/dirJwe.ts's `verifyDirJwe` doc comment for why this deliberately
+ * does not use the token's own `kid` header to pick a single candidate.
  */
 export async function verifyOneTimeToken(
   token: string,
   candidateKeys: OneTimeTokenKey[],
   now: number = Date.now(),
 ): Promise<OneTimeTokenPayload | null> {
-  // Validated up front, outside the try/catch below: a candidate's key being
-  // the wrong byte length is a misconfiguration (e.g. a bad secret value),
-  // not a decrypt failure, and must still fail loudly rather than be
-  // silently swallowed as "this candidate didn't match, try the next one."
-  const candidateKeyBytes = candidateKeys.map((candidate) => keyBytes(candidate.key))
-
-  for (const bytes of candidateKeyBytes) {
-    try {
-      const { payload } = await jwtDecrypt(token, bytes, { currentDate: new Date(now) })
-      return payload as unknown as OneTimeTokenPayload
-    } catch {
-      // Try the next candidate; only exhausting the whole list is failure.
-    }
-  }
-  return null
+  return await verifyDirJwe<OneTimeTokenPayload>(token, candidateKeys, CONTEXT, ENV_VAR_NAME, now)
 }
