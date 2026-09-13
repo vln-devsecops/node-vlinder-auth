@@ -81,10 +81,24 @@ function accessTokenDeliveryFromEnv(): AccessTokenDelivery {
   return value
 }
 
+/**
+ * Strips trailing slashes without a regex -- `/\/+$/` flags SonarQube's
+ * S8786 (potential super-linear backtracking) even though this specific
+ * pattern is anchored and can't actually backtrack catastrophically; a
+ * plain loop sidesteps the check entirely rather than arguing with it.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value[end - 1] === '/') {
+    end -= 1
+  }
+  return value.slice(0, end)
+}
+
 /** Loads config from `process.env`, throwing loudly on any missing required variable. */
 export function loadConfig(): BffConfig {
   return {
-    authServiceBaseUrl: requireEnv('AUTH_SERVICE_BASE_URL').replace(/\/+$/, ''),
+    authServiceBaseUrl: stripTrailingSlashes(requireEnv('AUTH_SERVICE_BASE_URL')),
     rpClientId: requireEnv('RP_CLIENT_ID'),
     rpRedirectUri: requireEnv('RP_REDIRECT_URI'),
     stateJweKey: requireEnv('STATE_JWE_KEY'),

@@ -69,11 +69,9 @@ export function createRefreshClient(options: RefreshClientOptions): RefreshClien
   }
 
   function refresh(): Promise<RefreshResult> {
-    if (!inFlight) {
-      inFlight = doRefresh().finally(() => {
-        inFlight = null
-      })
-    }
+    inFlight ??= doRefresh().finally(() => {
+      inFlight = null
+    })
     return inFlight
   }
 

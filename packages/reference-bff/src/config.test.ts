@@ -46,6 +46,11 @@ describe('loadConfig', () => {
     expect(loadConfig().authServiceBaseUrl).toBe('https://auth.example.com')
   })
 
+  it('strips multiple trailing slashes', () => {
+    process.env.AUTH_SERVICE_BASE_URL = 'https://auth.example.com///'
+    expect(loadConfig().authServiceBaseUrl).toBe('https://auth.example.com')
+  })
+
   it('throws loudly, naming the variable, when a required var is missing', () => {
     delete process.env.RP_CLIENT_ID
     expect(() => loadConfig()).toThrow(/RP_CLIENT_ID/)
