@@ -418,6 +418,23 @@ Not scheduled; pick up when the trigger arrives.
   the `time` provider even though the diff that removed
   `time_rotating.auth_session_signing_key` (step 7's rotation rework) was
   its only consumer.
+- **Deploy the reference BFF (`packages/reference-bff`) as a Lambda.**
+  `createApp(config)` returns a plain Express `Application`, decoupled from
+  `server.ts`'s `app.listen()` — nothing in the routes, CSRF middleware, or
+  cookie handling depends on a real socket, streaming, or a long-lived
+  connection. A thin adapter (`serverless-http` or
+  `@vendia/serverless-express`) wrapping `createApp(loadConfig())` behind an
+  API Gateway proxy integration should work with no changes to this
+  package's own code — trigger for that path: an adopter wants exactly this
+  and it's worth writing up as a documented deployment option. Distinct
+  from, and not to be confused with, rewriting it as a **native** handler
+  matching `lambda-src/auth-api/handler.ts`'s own style (hand-rolled
+  `APIGatewayProxyEventV2` routing, no Express dependency) — that would mean
+  dropping Express and reimplementing routing, the CSRF middleware, and
+  cookie parsing/serialization to match those conventions, a real rewrite,
+  not an adapter. No trigger for that path yet; the reference implementation
+  is deliberately framework-generic (Express) so any adopter, not just ones
+  on Lambda, can read and adapt it.
 
 ## Progress log
 
