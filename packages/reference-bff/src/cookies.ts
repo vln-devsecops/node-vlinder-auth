@@ -25,11 +25,26 @@ export const ACCESS_COOKIE = 'vln_bff_access'
 // deliberately NOT `HttpOnly` so front-end JS can read it and echo it back
 // in the X-Vln-Csrf-Token header. See src/csrf.ts.
 export const CSRF_COOKIE = 'vln_auth_csrf'
+// Short-lived, single-use, set at GET /login and consumed at
+// GET /login/callback -- see routes/login.ts and routes/callback.ts. Binds
+// the OAuth `state` to the browser that actually initiated the flow (RFC
+// 6749 §10.12): without this, `state` only smuggles the PKCE verifier, and
+// an attacker can complete a real login as themselves, capture the
+// resulting token+state pair, and lure a victim into visiting the callback
+// URL -- logging the victim into the attacker's account ("login CSRF").
+export const LOGIN_NONCE_COOKIE = 'vln_bff_login_csrf'
 
 export interface CookieOptions {
   maxAgeSeconds: number
   path?: string
   httpOnly?: boolean
+  /**
+   * Defaults to 'strict'. LOGIN_NONCE_COOKIE is the one deliberate exception
+   * (passes 'lax'): it must be readable on the top-level, cross-site-
+   * initiated GET the browser makes when the auth service redirects back to
+   * /login/callback, which a Strict cookie would not be sent on.
+   */
+  sameSite?: 'strict' | 'lax'
 }
 
 /**
@@ -44,7 +59,7 @@ export function serializeBffCookie(name: string, value: string, opts: CookieOpti
     maxAge: opts.maxAgeSeconds,
     httpOnly: opts.httpOnly ?? true,
     secure: true,
-    sameSite: 'strict',
+    sameSite: opts.sameSite ?? 'strict',
   })
 }
 

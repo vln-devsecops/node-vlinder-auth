@@ -4,7 +4,8 @@ A reference Backend-For-Frontend for any adopter of `auth.<zone>`. Run this
 (or fork it) alongside your own app so its front-end never talks to the auth
 service directly. It implements the "RP back-end (BFF)" participant in
 [`doc/vendor-neutral-auth.md`](../../doc/vendor-neutral-auth.md): PKCE
-minting, an encrypted `state`, the refresh-token cookie, single-flighted
+minting, an encrypted `state` bound to the initiating browser (login-CSRF
+protection, RFC 6749 §10.12), the refresh-token cookie, single-flighted
 refresh, double-submit CSRF, and the `/sudo`, `/whoami`, `/logout` relays.
 
 This is the correct, secure way to do this — every adopter starts from (or

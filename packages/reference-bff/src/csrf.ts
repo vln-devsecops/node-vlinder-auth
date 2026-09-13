@@ -42,7 +42,8 @@ export function verifyCsrfToken(
   return constantTimeEquals(expected, cookieValue) && constantTimeEquals(expected, headerValue)
 }
 
-function constantTimeEquals(a: string, b: string): boolean {
+/** Also used by routes/callback.ts to compare the login-nonce cookie against the value embedded in `state`. */
+export function constantTimeEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a)
   const bufB = Buffer.from(b)
   if (bufA.length !== bufB.length) {

@@ -20,6 +20,19 @@ import { EncryptJWT, jwtDecrypt } from 'jose'
 export interface StatePayload {
   codeVerifier: string
   issuedAt: number // epoch ms
+  /**
+   * A random, single-use value also set as a short-lived cookie at /login
+   * (see cookies.ts's LOGIN_NONCE_COOKIE) and compared against it at
+   * /login/callback. This is what binds `state` to the browser that
+   * actually initiated the flow -- without it, `state` only smuggles the
+   * PKCE verifier, and an attacker can complete a real login as themselves,
+   * capture the resulting token+state pair, and lure a victim into visiting
+   * it: the callback would decrypt and exchange it successfully and log the
+   * victim into the attacker's account (a "login CSRF" -- RFC 6749 §10.12
+   * requires state to be bound to the requester's session for exactly this
+   * reason).
+   */
+  csrfNonce: string
 }
 
 /**
@@ -47,7 +60,11 @@ export async function mintState(
   now: number = Date.now(),
 ): Promise<string> {
   const iat = Math.floor(now / 1000)
-  return await new EncryptJWT({ codeVerifier: payload.codeVerifier, issuedAt: payload.issuedAt })
+  return await new EncryptJWT({
+    codeVerifier: payload.codeVerifier,
+    issuedAt: payload.issuedAt,
+    csrfNonce: payload.csrfNonce,
+  })
     .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
     .setIssuedAt(iat)
     .setExpirationTime(iat + ttlSeconds)
@@ -73,10 +90,14 @@ export async function verifyState(
   const bytes = keyBytes(key)
   try {
     const { payload } = await jwtDecrypt(token, bytes, { currentDate: new Date(now) })
-    if (typeof payload.codeVerifier !== 'string' || typeof payload.issuedAt !== 'number') {
+    if (
+      typeof payload.codeVerifier !== 'string' ||
+      typeof payload.issuedAt !== 'number' ||
+      typeof payload.csrfNonce !== 'string'
+    ) {
       return null
     }
-    return { codeVerifier: payload.codeVerifier, issuedAt: payload.issuedAt }
+    return { codeVerifier: payload.codeVerifier, issuedAt: payload.issuedAt, csrfNonce: payload.csrfNonce }
   } catch {
     return null
   }

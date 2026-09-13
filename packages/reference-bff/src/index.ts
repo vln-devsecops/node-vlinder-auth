@@ -6,7 +6,7 @@ export { createApp } from './app'
 export type { AccessTokenDelivery, BffConfig } from './config'
 export { loadConfig } from './config'
 
-export { ACCESS_COOKIE, CSRF_COOKIE, REFRESH_COOKIE } from './cookies'
+export { ACCESS_COOKIE, CSRF_COOKIE, LOGIN_NONCE_COOKIE, REFRESH_COOKIE } from './cookies'
 export { CSRF_HEADER } from './app'
 
 export { loginRoute, LOGIN_STATE_TTL_SECONDS } from './routes/login'
