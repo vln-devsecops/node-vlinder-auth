@@ -33,7 +33,12 @@ export function relayRoute(config: BffConfig, opts: RelayRouteOptions): RequestH
     const upstream = await authServiceClient.relay(config.authServiceBaseUrl, opts.upstreamPath, {
       method: opts.method,
       authorization,
-      body: opts.method === 'POST' ? req.body : undefined,
+      // express.json() defaults req.body to {} for a POST with no body at
+      // all, not undefined -- forwarding that as-is would always send a
+      // JSON body (and content-type) upstream even for e.g. /logout, which
+      // needs neither. Only forward a body that actually has content.
+      body:
+        opts.method === 'POST' && req.body && Object.keys(req.body).length > 0 ? req.body : undefined,
     })
 
     if (opts.clearCookiesOnComplete) {

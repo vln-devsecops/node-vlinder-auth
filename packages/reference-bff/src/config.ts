@@ -50,6 +50,22 @@ function requireEnv(key: string): string {
 }
 
 /**
+ * `dir`/A256GCM requires exactly 32 raw key bytes -- stateJwe.ts's own
+ * `keyBytes` checks this too, but only lazily, the first time GET /login or
+ * /login/callback actually runs. Checking again here means a misconfigured
+ * STATE_JWE_KEY fails at startup, matching this module's own "fail loudly at
+ * startup" promise, instead of surfacing only in production traffic.
+ */
+function requireStateJweKey(): string {
+  const value = requireEnv('STATE_JWE_KEY')
+  const byteLength = new TextEncoder().encode(value).length
+  if (byteLength !== 32) {
+    throw new Error(`STATE_JWE_KEY must be exactly 32 bytes for A256GCM, got ${byteLength}.`)
+  }
+  return value
+}
+
+/**
  * Requires a positive integer, not merely a finite number -- both consumers
  * (PORT, REFRESH_COOKIE_MAX_AGE_SECONDS) end up passed to APIs (`net.Server
  * .listen`, the `cookie` package's `serialize`) that reject a non-integer or
@@ -101,7 +117,7 @@ export function loadConfig(): BffConfig {
     authServiceBaseUrl: stripTrailingSlashes(requireEnv('AUTH_SERVICE_BASE_URL')),
     rpClientId: requireEnv('RP_CLIENT_ID'),
     rpRedirectUri: requireEnv('RP_REDIRECT_URI'),
-    stateJweKey: requireEnv('STATE_JWE_KEY'),
+    stateJweKey: requireStateJweKey(),
     csrfSecret: requireEnv('CSRF_SECRET'),
     accessTokenDelivery: accessTokenDeliveryFromEnv(),
     refreshCookieMaxAgeSeconds: optionalEnvInt('REFRESH_COOKIE_MAX_AGE_SECONDS', 2592000),

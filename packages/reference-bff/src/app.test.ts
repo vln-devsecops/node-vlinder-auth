@@ -301,6 +301,22 @@ describe('relays: GET /whoami, POST /sudo, POST /logout', () => {
     expect(res.status).toBe(404) // /sudo doesn't exist on the auth service yet -- expected.
   })
 
+  it('POST /logout forwards no body when the client sent none, rather than an empty {} from express.json()', async () => {
+    const csrf = csrfPair('refresh-1')
+    vi.mocked(authServiceClient.relay).mockResolvedValue({ status: 404, body: {} })
+
+    await request(createApp(baseConfig))
+      .post('/logout')
+      .set('Cookie', [`vln_bff_refresh=refresh-1`, `vln_auth_csrf=${csrf}`])
+      .set('X-Vln-Csrf-Token', csrf)
+
+    expect(vi.mocked(authServiceClient.relay)).toHaveBeenCalledWith(
+      'https://auth.example.com',
+      '/api/v1/auth/logout',
+      expect.objectContaining({ body: undefined }),
+    )
+  })
+
   it('POST /logout clears all cookies unconditionally, even when the upstream relay 404s', async () => {
     const csrf = csrfPair('refresh-1')
     vi.mocked(authServiceClient.relay).mockResolvedValue({ status: 404, body: {} })

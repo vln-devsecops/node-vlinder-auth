@@ -56,6 +56,11 @@ describe('loadConfig', () => {
     expect(() => loadConfig()).toThrow(/RP_CLIENT_ID/)
   })
 
+  it('rejects a STATE_JWE_KEY of the wrong byte length at load time, not on the first /login request', () => {
+    process.env.STATE_JWE_KEY = 'too-short'
+    expect(() => loadConfig()).toThrow(/STATE_JWE_KEY must be exactly 32 bytes/)
+  })
+
   it('respects ACCESS_TOKEN_DELIVERY=body', () => {
     process.env.ACCESS_TOKEN_DELIVERY = 'body'
     expect(loadConfig().accessTokenDelivery).toBe('body')
