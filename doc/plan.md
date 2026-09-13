@@ -311,6 +311,60 @@ Not scheduled; pick up when the trigger arrives.
   participant alias, and a semicolon in a note, both fatal to the parser).
   Add a `mermaid-cli` render step to `ci_lint_markdown.yml`; it needs
   `--puppeteerConfigFile` with `--no-sandbox` on GitHub runners.
+- **Single-tenant mode's `"default"` tenant id is not a real tenant id.**
+  `terraform-modules/modules/aws/vlinder_auth/main.tf` hardcodes the literal
+  string `"default"` as `tenantId` for every client row when
+  `tenancy_mode != "multi"` (`aws_dynamodb_table_item.tenant_clients`, plus
+  `DEFAULT_TENANT_ID` fed into the post-confirmation Lambda) — a magic
+  sentinel baked into code, not a value drawn from the same namespace/format
+  real tenant ids use. The DynamoDB item shape should be identical in both
+  tenancy modes so nothing downstream (or a future migration from
+  single-tenant to multi-tenant) has to special-case a fake id. Give the
+  adopter's implicit tenant a real generated id (a UUID, like any other
+  tenant) even in single-tenant mode.
+- **Tenant reference data is Terraform-owned and should not be.** All tenant
+  rows — `aws_dynamodb_table_item.tenants`, `.tenant_clients` (including the
+  `auth.<zone>` tenant's own client row and, per the point above, the
+  single-tenant adopter's), and `.tenant_domain_providers` — are ordinary
+  Terraform-tracked resources in `main.tf`. Terraform will revert any
+  out-of-band edit on the next `apply`, and changing a tenant's data requires
+  a redeploy. Contrast with how this module already treats the two rotatable
+  secrets: seeded once via a `null_resource` + AWS CLI precisely so the
+  *value* never becomes tracked Terraform state (see the
+  `auth_session_signing_key_seed`/`auth_one_time_token_key_seed` comments).
+  Tenant rows deserve the same treatment: Terraform should seed only the
+  `auth.<zone>` tenant and the initial adopter tenant (if any) once, via a
+  non-owning mechanism, not `aws_dynamodb_table_item`; every other tenant
+  should be created through the API (step 2's registration interface), never
+  through Terraform.
+- **Rotated secrets land at ~190-208 bits of entropy, not 256.**
+  `rotate-secret/handler.ts` (and the Terraform bootstrap scripts it
+  replaced) call `GetRandomPassword` with `ExcludePunctuation: true`, which
+  draws from a 62-character alphabet (digits+upper+lower, ~5.95 bits/char),
+  not 8 bits/char. `PasswordLength: 32` (the one-time-token AES-256-GCM key)
+  is ~190.5 bits of actual entropy, and `PasswordLength: 64` (the session
+  signing key) is ~381 bits — the `ExcludePunctuation`-guarantees-all-ASCII
+  reasoning is correct for the *byte-length* requirement (32 chars ⇒ 32
+  bytes, satisfying AES-256's key-size constraint), but conflates that with
+  entropy, which is not the same thing for a 62-symbol alphabet. Fix by
+  generating the one-time-token key from raw random bytes (e.g.
+  `crypto.randomBytes(32)`, base64/hex-encoded for storage) instead of
+  `GetRandomPassword`, to actually reach 256 bits.
+- **Secret rotation is a bespoke Lambda, not AWS Secrets Manager's own
+  rotation.** The `rotate_secret` Lambda (`main.tf`, `rotate-secret/handler.ts`)
+  is invoked directly by `aws_scheduler_schedule` on a fixed cadence and
+  calls `GetRandomPassword`+`PutSecretValue` itself; it does not implement
+  the AWS rotation Lambda contract (`createSecret`/`setSecret`/`testSecret`/
+  `finishSecret`, dispatched via the event's `Step` field) and there is no
+  `aws_secretsmanager_secret_rotation` resource or `secretsmanager:RotateSecret`
+  permission anywhere in the module (both secrets carry a
+  `checkov:skip=CKV2_AWS_57` explaining why). Using Secrets Manager's native
+  rotation would mean less bespoke logic to maintain and a staged
+  AWSPENDING/AWSCURRENT/AWSPREVIOUS rollover instead of relying on
+  `PutSecretValue`'s implicit promotion. Worth revisiting once there's a
+  concrete reason the current approach is causing pain — `PutSecretValue`'s
+  automatic stage promotion has, so far, been sufficient for this module's
+  actual rotation-tolerance needs.
 
 ## Progress log
 
