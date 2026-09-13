@@ -49,14 +49,23 @@ function requireEnv(key: string): string {
   return value
 }
 
+/**
+ * Requires a positive integer, not merely a finite number -- both consumers
+ * (PORT, REFRESH_COOKIE_MAX_AGE_SECONDS) end up passed to APIs (`net.Server
+ * .listen`, the `cookie` package's `serialize`) that reject a non-integer or
+ * negative value themselves, but only once a request/listen actually
+ * happens. Catching it here instead keeps this module's "fail loudly at
+ * startup" promise instead of a cryptic downstream TypeError the first time
+ * a route touches the bad value.
+ */
 function optionalEnvInt(key: string, fallback: number): number {
   const value = process.env[key]
   if (value === undefined || value === '') {
     return fallback
   }
   const parsed = Number(value)
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`Environment variable ${key} must be a number, got: ${value}`)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Environment variable ${key} must be a non-negative integer, got: ${value}`)
   }
   return parsed
 }

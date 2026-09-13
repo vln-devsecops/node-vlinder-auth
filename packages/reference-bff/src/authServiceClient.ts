@@ -61,6 +61,45 @@ export async function refresh(
   return { status: response.status, body: (await parseJsonBody(response)) as RefreshResponseBody }
 }
 
+export interface SessionTokens {
+  accessToken: string
+  idToken: string
+  refreshToken: string
+  expiresAt: number
+}
+
+/**
+ * Validates a 2xx token-exchange/refresh response body before any caller
+ * uses its fields. `parseJsonBody` returns `{}` for an empty body and the
+ * `TokenExchangeResponseBody`/`RefreshResponseBody` casts above do no
+ * runtime check, so a malformed or unexpectedly-shaped 200 from the auth
+ * service would otherwise reach cookies.ts's `sessionCookies` with
+ * `undefined` fields -- corrupting a cookie value to the literal string
+ * "undefined", or, for `expiresAt`, producing `NaN` that the `cookie`
+ * package's own `serialize()` rejects with a cryptic `TypeError` deep inside
+ * cookie-serialization code instead of a clear error here. Throws
+ * `UpstreamContractError` naming exactly what was missing/wrong.
+ */
+export function assertSessionTokens(body: unknown): SessionTokens {
+  const candidate = body as Partial<SessionTokens> | null | undefined
+  const problems: string[] = []
+  if (typeof candidate?.accessToken !== 'string') problems.push('accessToken')
+  if (typeof candidate?.idToken !== 'string') problems.push('idToken')
+  if (typeof candidate?.refreshToken !== 'string') problems.push('refreshToken')
+  if (typeof candidate?.expiresAt !== 'number' || !Number.isFinite(candidate.expiresAt)) {
+    problems.push('expiresAt')
+  }
+  if (problems.length > 0) {
+    throw new UpstreamContractError(
+      `Auth service returned a 2xx response missing or malformed field(s): ${problems.join(', ')}.`,
+    )
+  }
+  return candidate as SessionTokens
+}
+
+/** The auth service returned a 2xx response that doesn't match the documented contract. */
+export class UpstreamContractError extends Error {}
+
 export interface RelayParams {
   method: 'GET' | 'POST'
   /** Authorization header value to attach, e.g. "Bearer <accessToken>". Omitted if undefined. */

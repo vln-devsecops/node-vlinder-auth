@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { exchangeToken, refresh, relay } from './authServiceClient'
+import { assertSessionTokens, exchangeToken, refresh, relay, UpstreamContractError } from './authServiceClient'
 
 describe('authServiceClient', () => {
   const originalFetch = global.fetch
@@ -88,5 +88,25 @@ describe('authServiceClient', () => {
     mockFetch.mockResolvedValue(new Response('Not Found', { status: 404 }))
     const result = await relay('https://auth.example.com', '/api/v1/auth/whoami', { method: 'GET' })
     expect(result.status).toBe(404)
+  })
+})
+
+describe('assertSessionTokens', () => {
+  const VALID = { accessToken: 'a', idToken: 'i', refreshToken: 'r', expiresAt: 123 }
+
+  it('returns the body unchanged when every field is present and well-typed', () => {
+    expect(assertSessionTokens(VALID)).toEqual(VALID)
+  })
+
+  it.each([
+    ['an empty object (e.g. a 200 with no body)', {}],
+    ['a missing accessToken', { ...VALID, accessToken: undefined }],
+    ['a non-string idToken', { ...VALID, idToken: 42 }],
+    ['a missing refreshToken', { ...VALID, refreshToken: undefined }],
+    ['a non-numeric expiresAt', { ...VALID, expiresAt: 'soon' }],
+    ['a NaN expiresAt', { ...VALID, expiresAt: NaN }],
+    ['null', null],
+  ])('throws UpstreamContractError for %s', (_description, body) => {
+    expect(() => assertSessionTokens(body)).toThrow(UpstreamContractError)
   })
 })

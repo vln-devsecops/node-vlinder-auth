@@ -65,4 +65,17 @@ describe('loadConfig', () => {
     process.env.REFRESH_COOKIE_MAX_AGE_SECONDS = '60'
     expect(loadConfig().refreshCookieMaxAgeSeconds).toBe(60)
   })
+
+  it('rejects a non-integer REFRESH_COOKIE_MAX_AGE_SECONDS at startup, not at the first request', () => {
+    // Regression: a fractional value used to pass loadConfig() and only fail
+    // later, deep inside the `cookie` package's own serialize(), the first
+    // time a route actually minted a cookie with it.
+    process.env.REFRESH_COOKIE_MAX_AGE_SECONDS = '100.5'
+    expect(() => loadConfig()).toThrow(/REFRESH_COOKIE_MAX_AGE_SECONDS must be a non-negative integer/)
+  })
+
+  it('rejects a negative PORT', () => {
+    process.env.PORT = '-1'
+    expect(() => loadConfig()).toThrow(/PORT must be a non-negative integer/)
+  })
 })

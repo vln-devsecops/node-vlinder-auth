@@ -115,6 +115,16 @@ describe('GET /login/callback', () => {
     const res = await request(createApp(baseConfig)).get('/login/callback').query({ token: 't', state: 'garbage' })
     expect(res.status).toBe(400)
   })
+
+  it('502s when the auth service returns a 2xx with a malformed body, instead of crashing on cookie serialization', async () => {
+    const state = await stateFor()
+    vi.mocked(authServiceClient.exchangeToken).mockResolvedValue({ status: 200, body: {} })
+
+    const res = await request(createApp(baseConfig)).get('/login/callback').query({ token: 't', state })
+
+    expect(res.status).toBe(502)
+    expect(res.headers['set-cookie']).toBeUndefined()
+  })
 })
 
 describe('POST /refresh', () => {
@@ -166,6 +176,18 @@ describe('POST /refresh', () => {
     expect(vi.mocked(authServiceClient.refresh)).toHaveBeenCalledWith('https://auth.example.com', {
       refresh_token: 'refresh-1',
     })
+  })
+
+  it('502s when the auth service returns a 2xx with a malformed body', async () => {
+    const csrf = csrfPair('refresh-1')
+    vi.mocked(authServiceClient.refresh).mockResolvedValue({ status: 200, body: { accessToken: 'a' } })
+
+    const res = await request(createApp(baseConfig))
+      .post('/refresh')
+      .set('Cookie', [`vln_bff_refresh=refresh-1`, `vln_auth_csrf=${csrf}`])
+      .set('X-Vln-Csrf-Token', csrf)
+
+    expect(res.status).toBe(502)
   })
 
   it('clears all cookies and 401s when the auth service rejects the refresh token', async () => {

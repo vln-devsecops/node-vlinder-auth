@@ -1,5 +1,6 @@
 import type { Request, RequestHandler, Response } from 'express'
 import * as authServiceClient from '../authServiceClient'
+import { UpstreamContractError } from '../authServiceClient'
 import type { BffConfig } from '../config'
 import { sessionCookies } from '../cookies'
 import { verifyState } from '../stateJwe'
@@ -42,7 +43,17 @@ export function callbackRoute(config: BffConfig): RequestHandler {
       return
     }
 
-    const { accessToken, idToken, refreshToken, expiresAt } = upstream.body
+    let tokens
+    try {
+      tokens = authServiceClient.assertSessionTokens(upstream.body)
+    } catch (error) {
+      if (error instanceof UpstreamContractError) {
+        res.status(502).json({ error: 'upstream_contract_violation', message: error.message })
+        return
+      }
+      throw error
+    }
+    const { accessToken, idToken, refreshToken, expiresAt } = tokens
 
     res.setHeader('Set-Cookie', sessionCookies(config, { accessToken, refreshToken, expiresAt }))
 
