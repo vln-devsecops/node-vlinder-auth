@@ -101,7 +101,7 @@ export async function refresh(params: RefreshParams): Promise<RefreshResult> {
     { cognitoRefreshToken: result.RefreshToken, elevatedGrants: liveGrants },
     mintKey,
     refreshTokenTtlSeconds,
-    now,
+    nowMs,
   )
 
   return {

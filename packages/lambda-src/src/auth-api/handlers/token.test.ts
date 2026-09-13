@@ -139,5 +139,7 @@ describe('exchangeToken', () => {
     expect(result.accessToken).toBe(TOKENS.accessToken)
     expect(result.idToken).toBe(TOKENS.idToken)
     expect(result.expiresAt).toBe(TOKENS.expiresAt)
+    const decrypted = await verifyRefreshToken(result.refreshToken, [REFRESH_TOKEN_KEY])
+    expect(decrypted).toMatchObject({ cognitoRefreshToken: TOKENS.refreshToken, elevatedGrants: [] })
   })
 })

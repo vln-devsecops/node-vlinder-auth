@@ -434,6 +434,9 @@ async function routeRequest(
         keyId: version.versionId,
         key: version.value,
       }))
+      // getSecretVersions returns current first (see its doc comment in
+      // shared/secrets.ts) -- relying on that ordering here rather than a
+      // second, redundant getSecretVersion('AWSCURRENT') call.
       const mintKey: RefreshTokenKey = verifyKeys[0]
       const result = await refresh({
         refreshToken: bodyString(body.refresh_token),
