@@ -230,12 +230,12 @@ surfaces, not just adopter BFFs. The admin API is cookie-authenticated too
 the same protection rather than continuing to rest on `SameSite` plus an
 enforced no-`POST`-routes invariant.
 
-- [ ] Implement double-submit on the admin API, matching the BFF's scheme so
+- [x] Implement double-submit on the admin API, matching the BFF's scheme so
       there is one design to review, not two.
-- [ ] Rewrite `admin-api-csrf.md` in `terraform-modules`: its "not built now,
+- [x] Rewrite `admin-api-csrf.md` in `terraform-modules`: its "not built now,
       no caller" framing and its "if a POST route is ever needed" trigger both
       stop being true once this is unconditional.
-- [ ] **Keep** `admin_api_never_exposes_a_post_route`. Double-submit does not
+- [x] **Keep** `admin_api_never_exposes_a_post_route`. Double-submit does not
       make it redundant: it stays as defence in depth, and as the thing that
       forces a deliberate second look if a `POST` route is ever added.
 
@@ -435,6 +435,21 @@ Not scheduled; pick up when the trigger arrives.
   not an adapter. No trigger for that path yet; the reference implementation
   is deliberately framework-generic (Express) so any adopter, not just ones
   on Lambda, can read and adapt it.
+- **`terraform-modules`' `tests/lambdas.tftest.hcl` can't actually catch
+  wrong-secret wiring.** Its file-level `aws_secretsmanager_secret` mock
+  gives every one of the module's four rotatable secrets the identical
+  placeholder ARN, so any `strcontains(policy_or_env_var, one(secret[*]
+  .arn))` assertion passes as long as *any* secret's ARN appears — it can't
+  distinguish "wired to the right secret" from "wired to any secret at
+  all." Confirmed by deliberately mis-wiring one secret during step 8a's
+  review and rerunning `terraform test`: the pre-existing three-secret
+  assertions in this file didn't notice. Step 8a's own new test in
+  `tests/admin_api.tftest.hcl` was fixed with a scoped `override_resource`
+  (`override_during = plan`) giving that one secret a distinct ARN; the
+  same fix should be applied to `tests/lambdas.tftest.hcl`'s
+  `rotate_secret_role_can_only_write_the_four_rotatable_secrets` and
+  similar assertions, giving each of the four secrets its own distinct
+  mocked ARN.
 
 ## Progress log
 
@@ -1230,3 +1245,48 @@ done alongside what was.
   grant on the `rotate_secret` Lambda's IAM policy, and others) — out of
   scope for this PR since they're not part of its diff; recorded in the
   Backlog below rather than reopened here.
+
+- **2026-09-13** — Step 8a (double-submit on the admin API). The admin API
+  (cookie-authenticated via `vln_auth_session`, lifted to a `Bearer` header
+  at the edge by `terraform-modules`' `admin_api_rewrite.js`) now carries the
+  same double-submit CSRF scheme step 8's reference BFF established.
+  `node-vlinder-auth`: `POST /api/v1/auth/password`'s two success branches
+  (RP-handoff redirect and direct login) now also mint and set `vln_auth_csrf`
+  (`base64url(HMAC-SHA256(secret, sessionId))`, `sessionId` = the just-minted
+  `AS_SESSION_COOKIE`'s own value, same `Max-Age` as the other cookies in
+  that branch, `HttpOnly: false` so the SPA can echo it) via a new mint-only
+  `csrf.ts` and a new `ADMIN_API_CSRF_SECRET_ID` env var (`getSecret`,
+  forever-cached — deliberately, not a repeat of the earlier
+  forever-cache bug fixed on `/identify`'s signing key: that bug mattered
+  because a stale key broke *verification* downstream; this secret is never
+  re-read for verification at all, since the edge check is a pure
+  cookie-vs-header string comparison that never touches Secrets Manager, so
+  a warm instance using a slightly-stale value here has no functional or
+  meaningful security consequence). In `terraform-modules` (new PR against
+  `feature/cognito-auth-module`): a fourth rotatable secret
+  (`admin_api_csrf_secret`, same seed/rotation pattern as the other three,
+  but — documented explicitly in `admin-api-csrf.md` — with no
+  current+previous rotation-tolerance story, since nothing ever re-reads
+  `AWSPREVIOUS` for it); `admin_api_rewrite.js` now rejects (`403`) any
+  state-changing request whose `X-Vln-Csrf-Token` header doesn't match the
+  `vln_auth_csrf` cookie, short-circuiting before the Bearer lift, verified
+  both via `terraform test`'s `strcontains`-on-compiled-code convention and
+  by directly executing the actual function source against 6 hand-built
+  mock events (matching/mismatched/missing cookie or header, state-changing
+  vs. not). `admin_api_never_exposes_a_post_route` kept unchanged, as
+  designed. `admin-api-csrf.md`'s Status section rewritten from "not yet
+  implemented" to describe the shipped state.
+
+  An Opus review pass found a real, verified test-coverage gap: the new
+  Terraform test asserting `ADMIN_API_CSRF_SECRET_ID` points at the right
+  secret couldn't actually catch wrong-secret wiring, because the test
+  file's `aws_secretsmanager_secret` mock gives every secret the identical
+  placeholder ARN — confirmed by deliberately mis-wiring the env var to a
+  different secret and rerunning `terraform test`, which still passed.
+  Fixed with a scoped `override_resource` (`override_during = plan`) giving
+  just this secret a distinct ARN within that run block; re-verified both
+  directions (real wiring passes, the same deliberate mis-wiring now
+  fails). The identical mock-collapse weakness pre-dates this PR
+  (`tests/lambdas.tftest.hcl`'s three-secret version has the same
+  no-per-address-override mock) — not fixed here since it's already-merged
+  code from steps 7/8; recorded in the Backlog below instead.
