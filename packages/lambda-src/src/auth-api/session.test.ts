@@ -76,6 +76,18 @@ describe('cookie helpers', () => {
     expect(clearSessionCookie('vln_auth_session')).toContain('Max-Age=0')
   })
 
+  it('defaults to HttpOnly when the option is omitted', () => {
+    const cookie = serializeSessionCookie('vln_auth_csrf', 'abc', { maxAgeSeconds: 300 })
+    expect(cookie).toContain('HttpOnly')
+  })
+
+  it('omits HttpOnly when httpOnly: false is passed (the CSRF cookie case)', () => {
+    const cookie = serializeSessionCookie('vln_auth_csrf', 'abc', { maxAgeSeconds: 300, httpOnly: false })
+    expect(cookie).not.toContain('HttpOnly')
+    expect(cookie).toContain('Secure')
+    expect(cookie).toContain('SameSite=Strict')
+  })
+
   it('parses the API Gateway v2 cookies array into a map', () => {
     expect(parseCookies(['vln_auth_identify=xyz', 'other=1'])).toEqual({
       vln_auth_identify: 'xyz',

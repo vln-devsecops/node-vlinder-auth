@@ -21,6 +21,15 @@ export const AS_SESSION_COOKIE = 'vln_auth_session'
 // that cookie's format to carry structured data would break that already-
 // shipped bearer-lift. Step 9 (sudo/step-up) depends on knowing this fact.
 export const AUTH_METHOD_COOKIE = 'vln_auth_method'
+// Double-submit CSRF cookie for the admin API -- see
+// terraform-modules/modules/aws/vlinder_auth/doc/admin-api-csrf.md for the
+// full design and csrf.ts for how its value is minted. Deliberately **not**
+// HttpOnly, unlike every other cookie through serializeSessionCookie below:
+// the SPA must be able to read it in JS to echo it back in the
+// X-Vln-Csrf-Token header on state-changing admin-API requests. This Lambda
+// only ever mints it (alongside AS_SESSION_COOKIE); verification happens at
+// the CloudFront-Function edge, not here.
+export const CSRF_COOKIE = 'vln_auth_csrf'
 
 function keyBytes(key: string): Uint8Array {
   return new TextEncoder().encode(key)
@@ -79,21 +88,28 @@ export async function verifySession(
 export interface CookieOptions {
   maxAgeSeconds: number
   path?: string
+  /**
+   * Defaults to true. Every cookie through this function is HttpOnly except
+   * CSRF_COOKIE, which must be readable by JS -- pass `false` explicitly for
+   * that one case only (see CSRF_COOKIE's own doc comment above).
+   */
+  httpOnly?: boolean
 }
 
 /**
- * Serialize an HttpOnly, Secure, SameSite=Strict session cookie. SameSite=Strict
- * is safe because every consumer of these cookies is same-origin with the auth
- * component (see doc/vendor-neutral-auth.md); cross-origin apps never receive
- * them.
+ * Serialize a Secure, SameSite=Strict session cookie (HttpOnly by default --
+ * see CookieOptions.httpOnly). SameSite=Strict is safe because every consumer
+ * of these cookies is same-origin with the auth component (see
+ * doc/vendor-neutral-auth.md); cross-origin apps never receive them.
  */
 export function serializeSessionCookie(name: string, value: string, opts: CookieOptions): string {
   const path = opts.path ?? '/api/v1/auth'
+  const httpOnly = opts.httpOnly ?? true
   return [
     `${name}=${value}`,
     `Path=${path}`,
     `Max-Age=${opts.maxAgeSeconds}`,
-    'HttpOnly',
+    ...(httpOnly ? ['HttpOnly'] : []),
     'Secure',
     'SameSite=Strict',
   ].join('; ')

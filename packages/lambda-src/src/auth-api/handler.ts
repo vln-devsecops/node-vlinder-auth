@@ -4,7 +4,7 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda'
 import { getCognitoClient } from '../shared/cognito-client'
 import { getDdbDocClient } from '../shared/ddb-client'
-import { getSecretVersion, getSecretVersions } from '../shared/secrets'
+import { getSecret, getSecretVersion, getSecretVersions } from '../shared/secrets'
 import { getSesClient } from '../shared/ses-client'
 import { UnknownClientError } from '../shared/tenants'
 import {
@@ -29,9 +29,11 @@ import { CognitoClientError } from './cognitoError'
 import type { OneTimeTokenKey } from './oneTimeToken'
 import type { RefreshTokenKey } from './refreshToken'
 import { InvalidVerificationCodeError } from './verificationCodeError'
+import { mintCsrfCookieValue } from './csrf'
 import {
   AS_SESSION_COOKIE,
   AUTH_METHOD_COOKIE,
+  CSRF_COOKIE,
   IDENTIFY_SESSION_COOKIE,
   parseCookies,
   serializeSessionCookie,
@@ -93,6 +95,7 @@ interface RouteDeps {
   sessionSigningKeySecretId: string
   oneTimeTokenKeySecretId: string
   refreshTokenKeySecretId: string
+  adminApiCsrfSecretId: string
   cognitoClient: CognitoIdentityProviderClient
   ddbDocClient: DynamoDBDocumentClient
   sesClient: SESv2Client
@@ -163,6 +166,7 @@ async function routeRequest(
     sessionSigningKeySecretId,
     oneTimeTokenKeySecretId,
     refreshTokenKeySecretId,
+    adminApiCsrfSecretId,
     cognitoClient,
     ddbDocClient,
     sesClient,
@@ -225,9 +229,17 @@ async function routeRequest(
       // key in hand. Fetched via getSecretVersion (one round-trip) rather
       // than getSecretVersions (two), since the AWSPREVIOUS value it would
       // also fetch is never used for minting.
-      const [signingKeyVersions, currentOneTimeTokenKey] = await Promise.all([
+      // The admin-API CSRF secret is fetched here too, alongside the other
+      // two -- both success branches below need it to mint CSRF_COOKIE, and
+      // which branch runs is decided inside password(), after this call
+      // already needs the other keys in hand. Minting only ever needs the
+      // current value (this Lambda never verifies this cookie -- see
+      // csrf.ts), so getSecret's forever-cached lookup is enough; no
+      // rotation-boundary concern like signingKeyVersions above.
+      const [signingKeyVersions, currentOneTimeTokenKey, adminApiCsrfSecret] = await Promise.all([
         getSecretVersions(sessionSigningKeySecretId),
         getSecretVersion(oneTimeTokenKeySecretId, 'AWSCURRENT'),
+        getSecret(adminApiCsrfSecretId),
       ])
       if (!currentOneTimeTokenKey) {
         throw new Error(`Secret ${oneTimeTokenKeySecretId} has no AWSCURRENT version`)
@@ -276,6 +288,11 @@ async function routeRequest(
             maxAgeSeconds: redirectMaxAgeSeconds,
             path: '/',
           }),
+          serializeSessionCookie(
+            CSRF_COOKIE,
+            mintCsrfCookieValue(adminApiCsrfSecret, result.tokens.accessToken),
+            { maxAgeSeconds: redirectMaxAgeSeconds, path: '/', httpOnly: false },
+          ),
         ])
       }
 
@@ -292,6 +309,11 @@ async function routeRequest(
         serializeSessionCookie(AUTH_METHOD_COOKIE, 'local', {
           maxAgeSeconds,
           path: '/',
+        }),
+        serializeSessionCookie(CSRF_COOKIE, mintCsrfCookieValue(adminApiCsrfSecret, result.tokens.accessToken), {
+          maxAgeSeconds,
+          path: '/',
+          httpOnly: false,
         }),
       ])
     }
@@ -470,6 +492,7 @@ export async function handler(
     sessionSigningKeySecretId: requireEnv('SESSION_SIGNING_KEY_SECRET_ID'),
     oneTimeTokenKeySecretId: requireEnv('ONE_TIME_TOKEN_KEY_SECRET_ID'),
     refreshTokenKeySecretId: requireEnv('REFRESH_TOKEN_KEY_SECRET_ID'),
+    adminApiCsrfSecretId: requireEnv('ADMIN_API_CSRF_SECRET_ID'),
     cognitoClient: getCognitoClient(),
     ddbDocClient: getDdbDocClient(),
     sesClient: getSesClient(),
