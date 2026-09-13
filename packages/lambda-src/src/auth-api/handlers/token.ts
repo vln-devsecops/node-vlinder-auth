@@ -1,5 +1,6 @@
 import { verifyCodeChallenge } from '../pkce'
 import { type OneTimeTokenKey, verifyOneTimeToken } from '../oneTimeToken'
+import { mintRefreshToken, type RefreshTokenKey } from '../refreshToken'
 
 // The RP handoff's final step (see doc/vendor-neutral-auth.md's "Login"
 // sequence diagram): the RP's back-end exchanges the one-time token it
@@ -22,6 +23,16 @@ export interface TokenExchangeParams {
    * immediate-overwrite rotation.
    */
   keys: OneTimeTokenKey[]
+  /**
+   * Key for wrapping the raw Cognito refresh token before it leaves this
+   * Lambda in the response body (see doc/vendor-neutral-auth.md's Token
+   * model). Always the current Secrets Manager version -- minting a new
+   * wrapper around a token that was only just obtained has no
+   * rotation-boundary case, same reasoning as the one-time-token key's own
+   * minting side (see password.ts's oneTimeTokenKey doc comment).
+   */
+  refreshTokenKey: RefreshTokenKey
+  refreshTokenTtlSeconds: number
   now?: number
 }
 
@@ -33,7 +44,7 @@ export type TokenExchangeResult = {
 }
 
 export async function exchangeToken(params: TokenExchangeParams): Promise<TokenExchangeResult> {
-  const { token, codeVerifier, keys, now } = params
+  const { token, codeVerifier, keys, refreshTokenKey, refreshTokenTtlSeconds, now } = params
 
   const payload = await verifyOneTimeToken(token, keys, now)
   if (!payload) {
@@ -48,7 +59,19 @@ export async function exchangeToken(params: TokenExchangeParams): Promise<TokenE
     throw new PkceMismatchError('The code_verifier does not match the code_challenge.')
   }
 
-  return payload.tokens
+  // Wrap the raw Cognito refresh token in this Lambda's own JWE before it
+  // ever leaves in a response body -- the BFF holding it must never be able
+  // to read or replay it directly against Cognito (see doc/vendor-neutral-auth.md's
+  // Token model and Refresh sections). elevatedGrants starts empty: this is
+  // a brand-new login, so there is nothing to carry forward.
+  const wrappedRefreshToken = await mintRefreshToken(
+    { cognitoRefreshToken: payload.tokens.refreshToken, elevatedGrants: [] },
+    refreshTokenKey,
+    refreshTokenTtlSeconds,
+    now,
+  )
+
+  return { ...payload.tokens, refreshToken: wrappedRefreshToken }
 }
 
 export class InvalidOneTimeTokenError extends Error {}
