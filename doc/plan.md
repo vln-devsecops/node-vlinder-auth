@@ -262,22 +262,35 @@ means every step from here on gets the same routing-level safety net this
 gap showed was missing; it is not a hard prerequisite for step 9's remaining
 checklist items, but is deliberately sequenced before them for that reason.
 
-- [ ] Reimplement PR #22's demo-smoke scenario (seeded admin user signs in,
+- [x] Reimplement PR #22's demo-smoke scenario (seeded admin user signs in,
       reaches the admin panel) against current `e2e` conventions. Its diff
       against current `main` touches ~170 files — nearly this repo's entire
       history since July, including the privilege-model rewrite, client
       registry, RP handoff, refresh and reference-bff — so a literal rebase
-      is not realistically on the table; treat the old branch as a reference
-      for scope and behavior, not a starting point to carry forward.
-- [ ] Extend it beyond the original smoke scope to specifically route through
+      was not realistically on the table; the old branch served as a
+      reference for scope and behavior, not a starting point carried
+      forward.
+- [x] Extend it beyond the original smoke scope to specifically route through
       every endpoint a Terraform wiring gap could silently drop:
-      `/authorize`, `/token`, `/refresh`, `/whoami`, and the OIDC discovery
-      document. Lambda-level unit tests already cover their logic in full;
-      only a real deployment catches a missing `route_key`.
-- [ ] Bump `infra/demo/vlinder_auth`'s module ref to `feature/cognito-auth-module`'s
+      `/authorize`, `/token`, `/refresh` and `/whoami`. (The OIDC discovery
+      document already has this exact coverage —
+      `oidc-discovery.feature`'s "served as `application/json`" scenario
+      fetches it from a real deployment — so it wasn't duplicated here.)
+      Lambda-level unit tests already cover each route's logic in full; only
+      a real deployment, routed through a real API Gateway, catches a
+      missing `route_key` — confirmed by reading every handler's error path
+      to verify a bare/malformed request to each always 4xxs and never 5xxs,
+      so a 404 in this scenario outline can only mean routing regressed.
+- [ ] Re-apply `infra/demo/vlinder_auth` to pick up `feature/cognito-auth-module`'s
       current HEAD (now including the whoami route and the authorize/token/
-      refresh wiring fix) and re-apply, confirming the live URL actually
-      serves every route this step tests before trusting any of it green.
+      refresh wiring fix — the module source is pinned to the branch name,
+      not a commit SHA, so nothing needs editing here, only a real
+      `terraform apply`), confirming the live URL actually serves every
+      route this step tests before trusting any of it green. Needs the
+      `vln-devsecops-terraform-modules-integration` role's credentials and
+      the demo root's backend config (bucket/key) — not yet run this
+      session; a real, billable AWS apply is rlc's call, not a default
+      action.
 - [ ] Decide and document how the demo stays current going forward — an
       on-demand `workflow_dispatch` that re-applies and runs the suite, a
       schedule, or an explicit manual step in this plan's own workflow — so a
@@ -1417,3 +1430,26 @@ done alongside what was.
   `lint`/`tsc --noEmit` clean, 3 repeated full test runs to check for
   flakiness; terraform side at 83/83 `terraform test`, `tflint`/`checkov`
   clean.
+
+- **2026-09-14** — Step 8b, first two checklist items (persistent demo +
+  e2e route-wiring coverage). `e2e/features/demo-smoke.feature` and its step
+  definitions reimplemented from scratch against current `e2e` conventions —
+  PR #22's branch was, as anticipated when this step was written, not
+  rebasable (~170 files of drift), so it served only as a reference for
+  scope. Two scenarios: the original seeded-admin-user sign-in reaching the
+  admin panel, and a new outline sending a deliberately invalid request to
+  each of `/authorize`, `/token`, `/refresh` and `/whoami` and asserting a
+  4xx in `[400, 500)` — never a 404, which (per each handler's own
+  `errorResponse` mapping, read directly rather than assumed) is the one
+  status none of them can legitimately produce for a bare request, so seeing
+  one there can only mean the route itself isn't wired. `/.well-known/
+  openid-configuration` already had equivalent live-deployment coverage via
+  `oidc-discovery.feature`, so it wasn't duplicated. `cucumber-js --dry-run`
+  resolves all 21 scenarios, `tsc --noEmit` and `eslint .` clean.
+
+  Not done this session, deliberately: re-applying `infra/demo/vlinder_auth`
+  to pick up `feature/cognito-auth-module`'s current HEAD, and deciding how
+  the demo stays current going forward. Both remain as this step's last two
+  checklist items — the first is a real, billable `terraform apply` against
+  live AWS infrastructure, not something to run unprompted; the second is a
+  product/process decision for rlc.
