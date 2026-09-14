@@ -28,6 +28,19 @@ far apart and start cold.
    `terraform-modules`' current `feature/cognito-auth-module` HEAD and runs
    `node-vlinder-auth`'s `demo-smoke.feature` against it, catching a
    Terraform-wiring gap CI's mocked contract tests can't see (see step 8b).
+   **Sequencing caveat for a step that touches `packages/lambda-src`**: the
+   demo picks up Lambda code via `cd_publish_lambda_src.yml` (publishes only
+   `on: push: branches: [main]`, i.e. after merge) and then
+   `terraform-modules`' own Dependabot bump of the pinned
+   `@vln-devsecops/auth-lambda` version — two more steps, both needing their
+   own merge, before an apply picks up the new code. Triggering this
+   workflow *before* merging such a step proves nothing about that step's
+   own change; it only re-validates whatever Lambda version is already live.
+   For a `lambda-src` change, trigger this **after** merge, publish, and the
+   Dependabot bump all land — not as part of "before stop for review" here.
+   A `terraform-modules`-only change has no such lag: its module source is
+   pinned to the branch itself, so a merge into `feature/cognito-auth-module`
+   is picked up on the very next apply, and this step can run right away.
    Manual by design, for the duration of this redesign; drop this step and
    fold the check into ordinary CI once the redesign is done and the pace of
    auth-stack changes settles.
