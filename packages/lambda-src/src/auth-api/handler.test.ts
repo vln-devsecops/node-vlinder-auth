@@ -24,12 +24,14 @@ import {
 import type { APIGatewayProxyEventV2 } from 'aws-lambda'
 import { mockClient } from 'aws-sdk-client-mock'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mintCsrfCookieValue } from './csrf'
 import { handler } from './handler'
 import type { OneTimeTokenKey } from './oneTimeToken'
 import { mintRefreshToken, type RefreshTokenKey, verifyRefreshToken } from './refreshToken'
 import {
   AS_SESSION_COOKIE,
   AUTH_METHOD_COOKIE,
+  CSRF_COOKIE,
   IDENTIFY_SESSION_COOKIE,
   signSession,
   verifySession,
@@ -48,6 +50,10 @@ const ONE_TIME_TOKEN_KEY: OneTimeTokenKey = {
 const PREVIOUS_ONE_TIME_TOKEN_KEY_MATERIAL = 'test-previous-one-time-token-key'.slice(0, 32)
 const REFRESH_TOKEN_KEY_MATERIAL = 'test-refresh-token-key-32-bytes-'.slice(0, 32)
 const REFRESH_TOKEN_KEY: RefreshTokenKey = { keyId: 'refresh-version-current', key: REFRESH_TOKEN_KEY_MATERIAL }
+// Mint-only (getSecret, no VersionStage) -- no byte-length requirement, unlike
+// the A256GCM keys above (see csrf.ts's doc comment).
+// >= 43 bytes -- the minimum mintCsrfCookieValue enforces (see csrf.ts).
+const ADMIN_API_CSRF_SECRET = 'test-admin-api-csrf-secret-with-enough-bytes'
 const nowSeconds = Math.floor(Date.now() / 1000)
 const FUTURE_EXPIRY = nowSeconds + 600
 
@@ -76,6 +82,10 @@ beforeEach(() => {
       }
       return { SecretString: REFRESH_TOKEN_KEY_MATERIAL, VersionId: 'refresh-version-current' }
     }
+    if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:admin-api-csrf') {
+      // Mint-only (getSecret, no VersionStage) -- no VersionId needed.
+      return { SecretString: ADMIN_API_CSRF_SECRET }
+    }
     // The session-signing-key secret: /password's getSecretVersions call
     // needs a VersionId even though there's no AWSPREVIOUS in most of these
     // tests (getSecretVersion signals "doesn't exist" via
@@ -90,6 +100,7 @@ beforeEach(() => {
   process.env.SESSION_SIGNING_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:test'
   process.env.ONE_TIME_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token'
   process.env.REFRESH_TOKEN_KEY_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:refresh-token'
+  process.env.ADMIN_API_CSRF_SECRET_ID = 'arn:aws:secretsmanager:us-east-1:123:secret:admin-api-csrf'
   process.env.AUTH_CLIENT_ID = 'client-abc'
   process.env.USER_POOL_ID = 'us-east-1_example'
   process.env.TENANTS_TABLE_NAME = 'tenants-table'
@@ -105,6 +116,7 @@ afterEach(() => {
   delete process.env.SESSION_SIGNING_KEY_SECRET_ID
   delete process.env.ONE_TIME_TOKEN_KEY_SECRET_ID
   delete process.env.REFRESH_TOKEN_KEY_SECRET_ID
+  delete process.env.ADMIN_API_CSRF_SECRET_ID
   delete process.env.AUTH_CLIENT_ID
   delete process.env.USER_POOL_ID
   delete process.env.TENANTS_TABLE_NAME
@@ -185,6 +197,13 @@ describe('auth-api handler', () => {
 
     const methodCookie = res.cookies!.find((c) => c.startsWith(AUTH_METHOD_COOKIE))!
     expect(cookieValue(methodCookie)).toBe('local')
+
+    const csrfCookie = res.cookies!.find((c) => c.startsWith(CSRF_COOKIE))!
+    expect(cookieValue(csrfCookie)).toBe(mintCsrfCookieValue(ADMIN_API_CSRF_SECRET, 'a'))
+    expect(csrfCookie).not.toContain('HttpOnly')
+    expect(csrfCookie).toContain('Secure')
+    expect(csrfCookie).toContain('SameSite=Strict')
+    expect(csrfCookie).toContain('Path=/')
   })
 
   it('POST /api/v1/auth/password 401s on bad credentials without an AS cookie', async () => {
@@ -603,6 +622,9 @@ describe('auth-api handler', () => {
       if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:one-time-token') {
         return { SecretString: ONE_TIME_TOKEN_KEY_MATERIAL, VersionId: 'version-current' }
       }
+      if (input.SecretId === 'arn:aws:secretsmanager:us-east-1:123:secret:admin-api-csrf') {
+        return { SecretString: ADMIN_API_CSRF_SECRET }
+      }
       return { SecretString: KEY, VersionId: 'session-key-version-current' }
     })
     ddbMock.on(GetCommand).resolves({})
@@ -661,6 +683,10 @@ describe('auth-api handler', () => {
     expect(cookieValue(methodCookie)).toBe('local')
     const sessionCookie = res.cookies!.find((c) => c.startsWith(AS_SESSION_COOKIE))!
     expect(cookieValue(sessionCookie)).toBe('a')
+
+    const csrfCookie = res.cookies!.find((c) => c.startsWith(CSRF_COOKIE))!
+    expect(cookieValue(csrfCookie)).toBe(mintCsrfCookieValue(ADMIN_API_CSRF_SECRET, 'a'))
+    expect(csrfCookie).not.toContain('HttpOnly')
   })
 
   it('POST /api/v1/auth/refresh exchanges a valid refresh JWE for fresh tokens and a rotated JWE', async () => {

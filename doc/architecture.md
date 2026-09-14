@@ -66,8 +66,11 @@ edge rewrite that nobody remembers is a debugging trap:
   document and serve `index.html` in its place, with a `200`.
 - **`admin_api_rewrite`** (`/api/v1/*`) lifts the `vln_auth_session` cookie
   into an `Authorization: Bearer` header so the JWT authorizer sees ordinary
-  bearer semantics, and strips any client-supplied `x-origin-verify` header.
-  It does **not** rewrite the URI.
+  bearer semantics, strips any client-supplied `x-origin-verify` header, and
+  enforces double-submit CSRF by comparing the `vln_auth_csrf` cookie (minted
+  by the auth Lambda alongside `vln_auth_session`, see session.ts's
+  `CSRF_COOKIE`) against the `X-Vln-Csrf-Token` request header. It does
+  **not** rewrite the URI.
 
 The `/api/v1/auth*` behavior needs no function: its routes are public and its
 paths are passed through unmodified.
