@@ -811,6 +811,21 @@ describe('auth-api handler', () => {
     expect(res.statusCode).toBe(401)
   })
 
+  it('GET /api/v1/auth/whoami returns the identical 401 body for a missing cookie and a Cognito-rejected token', async () => {
+    // Regression: doc/vendor-neutral-auth.md's /whoami section promises
+    // "the two cases are indistinguishable in the response" -- returning
+    // each error's own .message would break that promise even though both
+    // already shared a 401 status code.
+    const missingCookie = await handler(event('GET /api/v1/auth/whoami'))
+
+    cognitoMock.on(GetUserCommand).rejects(new NotAuthorizedException({ message: 'invalid', $metadata: {} }))
+    const badToken = await handler(
+      event('GET /api/v1/auth/whoami', { cookies: [`${AS_SESSION_COOKIE}=bad-token`] }),
+    )
+
+    expect(missingCookie.body).toBe(badToken.body)
+  })
+
   it('404s an unrecognized route', async () => {
     const res = await handler(event('GET /api/v1/auth/nope'))
     expect(res.statusCode).toBe(404)

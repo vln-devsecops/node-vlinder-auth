@@ -64,7 +64,7 @@ export async function getUserProfile(params: GetUserProfileParams): Promise<User
   if (typeof item.displayName === 'string') {
     profile.displayName = item.displayName
   }
-  if (item.preferences && typeof item.preferences === 'object') {
+  if (item.preferences && typeof item.preferences === 'object' && !Array.isArray(item.preferences)) {
     profile.preferences = item.preferences as Record<string, unknown>
   }
   return profile

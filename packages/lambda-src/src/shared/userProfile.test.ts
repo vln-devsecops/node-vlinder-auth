@@ -71,4 +71,24 @@ describe('getUserProfile', () => {
 
     expect(profile).toEqual({ displayName: 'Jane Doe' })
   })
+
+  it('drops a malformed preferences value that is an array, rather than passing it through', async () => {
+    // Regression: `typeof x === 'object'` is also true for arrays in JS.
+    // Nothing writes this record yet, but a future malformed/legacy row
+    // must not silently violate UserProfile's Record<string, unknown> shape.
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        tenantId: 'auth',
+        sk: 'USERPROFILE#user-123',
+        preferences: ['not', 'an', 'object'],
+      },
+    })
+
+    const profile = await getUserProfile({
+      ...base,
+      ddbDocClient: ddbMock as unknown as DynamoDBDocumentClient,
+    })
+
+    expect(profile).toEqual({})
+  })
 })

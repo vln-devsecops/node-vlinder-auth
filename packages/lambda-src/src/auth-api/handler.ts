@@ -158,12 +158,14 @@ function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | unde
   if (error instanceof CognitoClientError) {
     return json(400, { error: error.message })
   }
-  // A caller shouldn't be able to distinguish "no AS session cookie" from
-  // "bad/expired AS session cookie" any more finely than "you're not
-  // authenticated" -- same treatment as InvalidSessionError/AuthFailedError
-  // above.
+  // Deliberately the same generic message for both -- same pattern as
+  // InvalidOneTimeTokenError/PkceMismatchError above. A caller must not be
+  // able to distinguish "no AS session cookie" from "bad/expired AS session
+  // cookie" from the response; doc/vendor-neutral-auth.md's /whoami section
+  // promises exactly this ("the two cases are indistinguishable in the
+  // response"), which returning either error's own .message would break.
   if (error instanceof MissingAccessTokenError || error instanceof InvalidAccessTokenError) {
-    return json(401, { error: error.message })
+    return json(401, { error: 'Authentication is required.' })
   }
   return undefined
 }
