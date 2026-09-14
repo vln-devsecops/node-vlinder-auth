@@ -3,6 +3,7 @@ import {
   AdminInitiateAuthCommand,
   AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
+  GetUserCommand,
   NotAuthorizedException,
   SignUpCommand,
   UsernameExistsException,
@@ -110,6 +111,8 @@ beforeEach(() => {
   process.env.VERIFICATION_CODE_MAX_ATTEMPTS = '5'
   process.env.SES_FROM_ADDRESS = 'no-reply@vlinder.example'
   process.env.REFRESH_TOKEN_TTL_SECONDS = '2592000'
+  process.env.ROLE_ASSIGNMENTS_TABLE_NAME = 'role-assignments-table'
+  process.env.ROLES_TABLE_NAME = 'roles-table'
 })
 
 afterEach(() => {
@@ -126,6 +129,8 @@ afterEach(() => {
   delete process.env.VERIFICATION_CODE_MAX_ATTEMPTS
   delete process.env.SES_FROM_ADDRESS
   delete process.env.REFRESH_TOKEN_TTL_SECONDS
+  delete process.env.ROLE_ASSIGNMENTS_TABLE_NAME
+  delete process.env.ROLES_TABLE_NAME
 })
 
 function event(
@@ -747,6 +752,60 @@ describe('auth-api handler', () => {
 
     const res = await handler(
       event('POST /api/v1/auth/refresh', { body: { refresh_token: incoming } }),
+    )
+
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('GET /api/v1/auth/whoami re-derives active/held privileges and profile for the AS session cookie', async () => {
+    cognitoMock.on(GetUserCommand).resolves({
+      Username: 'user-sub-123',
+      UserAttributes: [{ Name: 'sub', Value: 'user-sub-123' }],
+    })
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { userId: 'user-sub-123', tenantRole: 'acme#viewer', tenantId: 'acme', roleId: 'viewer', activation: 'default' },
+        { userId: 'user-sub-123', tenantRole: 'acme#admin', tenantId: 'acme', roleId: 'admin', activation: 'elevated' },
+      ],
+    })
+    ddbMock
+      .on(GetCommand, { TableName: 'roles-table', Key: { roleId: 'viewer' } })
+      .resolves({ Item: { roleId: 'viewer', tenantScope: 'tenant', privileges: ['read:*:orders'] } })
+    ddbMock
+      .on(GetCommand, { TableName: 'roles-table', Key: { roleId: 'admin' } })
+      .resolves({ Item: { roleId: 'admin', tenantScope: 'tenant', privileges: ['refund:*:orders'] } })
+    ddbMock
+      .on(GetCommand, { TableName: 'tenants-table', Key: { tenantId: 'auth', sk: 'USERPROFILE#user-sub-123' } })
+      .resolves({ Item: { displayName: 'Jane Doe' } })
+
+    const res = await handler(
+      event('GET /api/v1/auth/whoami', { cookies: [`${AS_SESSION_COOKIE}=cognito-access-token`] }),
+    )
+
+    expect(res.statusCode).toBe(200)
+    const body = JSON.parse(res.body!)
+    expect(body).toEqual({
+      active: ['read:acme:orders'],
+      held: ['refund:acme:orders'],
+      profile: { displayName: 'Jane Doe' },
+    })
+    expect(cognitoMock.commandCalls(GetUserCommand)[0].args[0].input).toEqual({
+      AccessToken: 'cognito-access-token',
+    })
+  })
+
+  it('GET /api/v1/auth/whoami 401s when there is no AS session cookie', async () => {
+    const res = await handler(event('GET /api/v1/auth/whoami'))
+
+    expect(res.statusCode).toBe(401)
+    expect(cognitoMock.commandCalls(GetUserCommand)).toHaveLength(0)
+  })
+
+  it('GET /api/v1/auth/whoami 401s when Cognito rejects the access token', async () => {
+    cognitoMock.on(GetUserCommand).rejects(new NotAuthorizedException({ message: 'invalid', $metadata: {} }))
+
+    const res = await handler(
+      event('GET /api/v1/auth/whoami', { cookies: [`${AS_SESSION_COOKIE}=bad-token`] }),
     )
 
     expect(res.statusCode).toBe(401)
