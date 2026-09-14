@@ -1290,3 +1290,21 @@ done alongside what was.
   (`tests/lambdas.tftest.hcl`'s three-secret version has the same
   no-per-address-override mock) — not fixed here since it's already-merged
   code from steps 7/8; recorded in the Backlog below instead.
+
+  rlc reviewed and raised a further point: the CSRF secret's *generation*
+  already yields ~420 bits (the seed script's full 94-character alphabet at
+  length 64, no `--exclude-punctuation`) — comfortably above the 256-bit
+  target — but nothing in the *code* enforced any minimum on whatever value
+  `ADMIN_API_CSRF_SECRET_ID` actually resolves to at runtime, unlike the
+  A256GCM keys elsewhere in this codebase (`shared/dirJwe.ts`'s `keyBytes`),
+  which fail loudly on a wrong byte count. A future manual override or
+  misconfigured env var could silently hand `mintCsrfCookieValue` a weak
+  key with no error at all. Fixed by adding a minimum-length check there:
+  43 bytes, chosen so that even a conservative alphanumeric-alphabet
+  assumption (62 chars, ~5.95 bits/char — the same conservative assumption
+  already used elsewhere in this project's own entropy analysis) still
+  guarantees >= 256 bits, not just the friendlier alphabet the seed script
+  actually produces. This is a minimum-length check, not a true entropy
+  check — no code can verify actual randomness from a string alone — but it
+  catches the class of misconfiguration that matters (an accidentally short
+  or placeholder value).

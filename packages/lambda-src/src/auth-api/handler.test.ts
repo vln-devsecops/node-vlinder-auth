@@ -52,7 +52,8 @@ const REFRESH_TOKEN_KEY_MATERIAL = 'test-refresh-token-key-32-bytes-'.slice(0, 3
 const REFRESH_TOKEN_KEY: RefreshTokenKey = { keyId: 'refresh-version-current', key: REFRESH_TOKEN_KEY_MATERIAL }
 // Mint-only (getSecret, no VersionStage) -- no byte-length requirement, unlike
 // the A256GCM keys above (see csrf.ts's doc comment).
-const ADMIN_API_CSRF_SECRET = 'test-admin-api-csrf-secret'
+// >= 43 bytes -- the minimum mintCsrfCookieValue enforces (see csrf.ts).
+const ADMIN_API_CSRF_SECRET = 'test-admin-api-csrf-secret-with-enough-bytes'
 const nowSeconds = Math.floor(Date.now() / 1000)
 const FUTURE_EXPIRY = nowSeconds + 600
 
