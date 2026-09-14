@@ -239,6 +239,47 @@ enforced no-`POST`-routes invariant.
       make it redundant: it stays as defence in depth, and as the thing that
       forces a deliberate second look if a `POST` route is ever added.
 
+### 8b. Persistent demo deployment + e2e against it — Sonnet / Sonnet
+
+Inserted here, as early as the already-completed steps above allow, directly
+because of the near miss recorded in the 2026-09-14 progress log entry above:
+`/authorize`, `/token` and `/refresh` were fully implemented and unit-tested
+at the Lambda-handler level (steps 6-7) but never actually wired into API
+Gateway, and the gap sat undetected because Terraform's own mocked contract
+tests can't see a route that was never added to the map in the first place —
+only a real deployment, routed through a real API Gateway, exercises that
+class of bug. `infra`'s `demo/vlinder_auth` root (`infra` PR #24, merged
+2026-09-05) already stands up exactly such a deployment — an unguessable,
+persistent, seeded-admin-user demo of whatever `feature/cognito-auth-module`
+currently contains — predating even step 4a; it was simply never paired with
+routine e2e runs against it. `node-vlinder-auth` had a matching smoke
+scenario (PR #22, opened the same day as the infra root) that was never
+finished and has since gone stale against the privilege-model rewrite, client
+registry, RP handoff, refresh and reference-bff work (steps 1-8) — the idea
+was right, the branch just aged out. Doing this now, before any more
+security-critical surface (step 9's remainder, logout, federation) is built,
+means every step from here on gets the same routing-level safety net this
+gap showed was missing; it is not a hard prerequisite for step 9's remaining
+checklist items, but is deliberately sequenced before them for that reason.
+
+- [ ] Rebase PR #22's demo-smoke scenario (seeded admin user signs in, reaches
+      the admin panel) onto current `e2e` conventions — `World`/hooks have
+      changed substantially since July — rather than reopening the old branch
+      wholesale.
+- [ ] Extend it beyond the original smoke scope to specifically route through
+      every endpoint a Terraform wiring gap could silently drop:
+      `/authorize`, `/token`, `/refresh`, `/whoami`, and the OIDC discovery
+      document. Lambda-level unit tests already cover their logic in full;
+      only a real deployment catches a missing `route_key`.
+- [ ] Bump `infra/demo/vlinder_auth`'s module ref to `feature/cognito-auth-module`'s
+      current HEAD (now including the whoami route and the authorize/token/
+      refresh wiring fix) and re-apply, confirming the live URL actually
+      serves every route this step tests before trusting any of it green.
+- [ ] Decide and document how the demo stays current going forward — an
+      on-demand `workflow_dispatch` that re-applies and runs the suite, a
+      schedule, or an explicit manual step in this plan's own workflow — so a
+      future wiring gap doesn't sit undetected the same way this one did.
+
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
 - [x] `GET /whoami`: `{ active, held }` re-derived from
