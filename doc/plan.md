@@ -262,10 +262,13 @@ means every step from here on gets the same routing-level safety net this
 gap showed was missing; it is not a hard prerequisite for step 9's remaining
 checklist items, but is deliberately sequenced before them for that reason.
 
-- [ ] Rebase PR #22's demo-smoke scenario (seeded admin user signs in, reaches
-      the admin panel) onto current `e2e` conventions — `World`/hooks have
-      changed substantially since July — rather than reopening the old branch
-      wholesale.
+- [ ] Reimplement PR #22's demo-smoke scenario (seeded admin user signs in,
+      reaches the admin panel) against current `e2e` conventions. Its diff
+      against current `main` touches ~170 files — nearly this repo's entire
+      history since July, including the privilege-model rewrite, client
+      registry, RP handoff, refresh and reference-bff — so a literal rebase
+      is not realistically on the table; treat the old branch as a reference
+      for scope and behavior, not a starting point to carry forward.
 - [ ] Extend it beyond the original smoke scope to specifically route through
       every endpoint a Terraform wiring gap could silently drop:
       `/authorize`, `/token`, `/refresh`, `/whoami`, and the OIDC discovery
