@@ -1308,3 +1308,19 @@ done alongside what was.
   check — no code can verify actual randomness from a string alone — but it
   catches the class of misconfiguration that matters (an accidentally short
   or placeholder value).
+
+- **2026-09-14** — While researching step 9, found and fixed a real,
+  pre-existing gap spanning steps 4a/6/7 (all already merged): `GET
+  /authorize`, `POST /token` and `POST /refresh` were implemented and fully
+  tested at the Lambda-handler level, but `terraform-modules`'
+  `local.auth_api_routes` never actually exposed them through API Gateway —
+  all three `404` in a real deployment, including the two whose URLs the
+  OIDC discovery document (step 4a) already advertises as
+  `authorization_endpoint`/`token_endpoint`. Root cause: the existing "full
+  public auth surface" Terraform test only checked its hardcoded 7-route
+  list via `contains()`, which stays green even when the real route map and
+  the expected list are missing the same three entries in lockstep — fixed
+  alongside the route wiring by adding an exact `length(...) == 10`
+  assertion so this specific failure mode can't recur silently. PR:
+  `terraform-modules#286`, against the same `feature/cognito-auth-module`
+  branch step 9's own PRs will build on.
