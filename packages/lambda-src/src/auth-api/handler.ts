@@ -25,6 +25,8 @@ import { InvalidRefreshTokenError, refresh } from './handlers/refresh'
 import { confirmSignUp, resendConfirmation, signUp } from './handlers/registration'
 import { confirmForgotPassword, forgotPassword } from './handlers/recovery'
 import { exchangeToken, InvalidOneTimeTokenError, PkceMismatchError } from './handlers/token'
+import { MissingAccessTokenError, whoami } from './handlers/whoami'
+import { InvalidAccessTokenError } from '../shared/currentUser'
 import { CognitoClientError } from './cognitoError'
 import type { OneTimeTokenKey } from './oneTimeToken'
 import type { RefreshTokenKey } from './refreshToken'
@@ -108,6 +110,8 @@ interface RouteDeps {
   verificationCodeMaxAttempts: number
   fromAddress: string
   refreshTokenTtlSeconds: number
+  roleAssignmentsTableName: string
+  rolesTableName: string
 }
 
 /** Maps a handler-thrown error to its HTTP response, or returns undefined to re-throw. */
@@ -154,6 +158,15 @@ function errorResponse(error: unknown): APIGatewayProxyStructuredResultV2 | unde
   if (error instanceof CognitoClientError) {
     return json(400, { error: error.message })
   }
+  // Deliberately the same generic message for both -- same pattern as
+  // InvalidOneTimeTokenError/PkceMismatchError above. A caller must not be
+  // able to distinguish "no AS session cookie" from "bad/expired AS session
+  // cookie" from the response; doc/vendor-neutral-auth.md's /whoami section
+  // promises exactly this ("the two cases are indistinguishable in the
+  // response"), which returning either error's own .message would break.
+  if (error instanceof MissingAccessTokenError || error instanceof InvalidAccessTokenError) {
+    return json(401, { error: 'Authentication is required.' })
+  }
   return undefined
 }
 
@@ -179,6 +192,8 @@ async function routeRequest(
     verificationCodeMaxAttempts,
     fromAddress,
     refreshTokenTtlSeconds,
+    roleAssignmentsTableName,
+    rolesTableName,
   } = deps
 
   switch (event.routeKey) {
@@ -472,6 +487,20 @@ async function routeRequest(
       return json(200, result)
     }
 
+    case 'GET /api/v1/auth/whoami': {
+      const cookies = parseCookies(event.cookies)
+      const result = await whoami({
+        accessToken: cookies[AS_SESSION_COOKIE],
+        cognitoClient,
+        roleAssignmentsTableName,
+        rolesTableName,
+        tenantsTableName,
+        authAppTenantId,
+        ddbDocClient,
+      })
+      return json(200, result)
+    }
+
     default:
       return json(404, { error: `Unrecognized route: ${event.routeKey}` })
   }
@@ -510,6 +539,11 @@ export async function handler(
     // only takes it as a parameter, same as VERIFICATION_CODE_TTL_SECONDS
     // above.
     refreshTokenTtlSeconds: Number(requireEnv('REFRESH_TOKEN_TTL_SECONDS')),
+    // Shared with the admin API's Terraform wiring for the same tables (see
+    // shared/privileges.ts's resolvePrivilegesForUser) -- reused verbatim,
+    // not app-specific to this Lambda.
+    roleAssignmentsTableName: requireEnv('ROLE_ASSIGNMENTS_TABLE_NAME'),
+    rolesTableName: requireEnv('ROLES_TABLE_NAME'),
   }
   const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {}
 

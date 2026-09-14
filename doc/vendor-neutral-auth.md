@@ -103,12 +103,20 @@ Same-origin, driven by `/authorize`.
 - **`POST /api/v1/auth/session`** — called directly by a browser with
   credentials, to clear the AS session cookie. Requires CORS for the calling
   origin.
-- **`GET /api/v1/auth/whoami`** — the current user as the UI needs them:
-  `{ active, held }` privileges re-derived from `user_role_assignments`, plus
-  profile attributes that have no business in a token at all (avatar,
-  preferences, display name). The privilege half overlaps the ID token; the
-  rest does not, which is why this endpoint exists rather than leaving the
-  front-end to read everything out of the ID token.
+- **`GET /api/v1/auth/whoami`** — the current user as the UI needs them,
+  authenticated via the AS session cookie (never a request body or header):
+  `{ active: string[], held: string[], profile: { avatarUrl?, displayName?,
+  preferences? } }`. `active`/`held` are re-derived fresh from
+  `user_role_assignments` on every call, never read from the caller's own
+  token — the whole point is reflecting a grant changed server-side after the
+  token was minted. `held` is disjoint from `active` (privileges already
+  active are never repeated in `held`) — it means "what you could step up
+  into." `profile` is a single global (not tenant-scoped) record; a user with
+  no profile row yet gets `{}`, not an error. 401s if the AS session cookie is
+  missing or Cognito rejects it — the two cases are indistinguishable in the
+  response. The privilege half overlaps the ID token; the rest does not,
+  which is why this endpoint exists rather than leaving the front-end to read
+  everything out of the ID token.
 - **`POST /api/v1/auth/sudo`** — activates a held privilege. See
   [Step-up](#step-up-sudo).
 

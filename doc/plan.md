@@ -241,17 +241,21 @@ enforced no-`POST`-routes invariant.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
-- [ ] `GET /whoami`: `{ active, held }` re-derived from
+- [x] `GET /whoami`: `{ active, held }` re-derived from
       `user_role_assignments`, plus the profile attributes that never belong
       in a token (avatar, preferences, display name). It is not redundant with
       the ID token — the privilege half overlaps, the rest does not, and it
       reflects grants changed server-side after the token was minted.
-- [ ] Design profile inheritance for `/whoami` (a tenant-level profile
-      overriding the global/default one) — raised in PR #103 review as an
-      open question, not yet discussed. Once designed, add the e2e/BDD
-      scenario also raised there: log a user into one tenant, then a second,
-      and assert both the per-tenant and overall token claims plus
-      `/whoami`'s tenant-scoped profile for each.
+      **Global profile only** — rlc deferred tenant-level profile inheritance
+      (see the bullet below) rather than design it now; `profile` is a single
+      global record with no per-tenant lookup or override.
+- [ ] **Deferred, not designed**: tenant-level profile inheritance for
+      `/whoami` (a tenant-level profile overriding the global/default one) —
+      raised in PR #103 review as an open question, not yet discussed, and
+      explicitly deferred by rlc rather than designed as part of this step.
+      Once designed, add the e2e/BDD scenario also raised there: log a user
+      into one tenant, then a second, and assert both the per-tenant and
+      overall token claims plus `/whoami`'s tenant-scoped profile for each.
 - [ ] `POST /sudo`: re-check the grant against `user_role_assignments`, mint an
       elevated access token and a rotated refresh token carrying the grant's
       expiry. Activation never creates a grant.
@@ -1324,3 +1328,48 @@ done alongside what was.
   assertion so this specific failure mode can't recur silently. PR:
   `terraform-modules#286`, against the same `feature/cognito-auth-module`
   branch step 9's own PRs will build on.
+
+- **2026-09-14** — Step 9, slice 1 (`GET /whoami`). Before starting, rlc was
+  asked directly about step 9's own flagged-but-undiscussed open question
+  (tenant-level profile inheritance for `/whoami`) and chose to defer it:
+  this slice ships a single **global** profile only, no per-tenant lookup or
+  override (see the checklist above). `/whoami` re-derives `{ active, held }`
+  fresh from `user_role_assignments` via the already-built
+  `resolvePrivilegesForUser` (`active` = its `accessTokenPrivileges`; `held`
+  = its `idTokenPrivileges` set-difference `accessTokenPrivileges`, so a
+  privilege already active never also appears in `held`), plus a `profile`
+  read from a new `USERPROFILE#<userId>` row on the existing `tenants` table
+  under the reserved `auth` tenant id — following the "extend the tenants
+  table, don't invent a parallel store" convention from step 2. Nothing
+  writes this row yet (no admin UI/API for it exists); a user with none gets
+  `{}`, not an error. Identity resolution is new: `auth_api` isn't behind a
+  JWT authorizer (that's the admin API's setup), so `/whoami` validates the
+  caller's own `AS_SESSION_COOKIE` access token in-process via Cognito's
+  non-admin `GetUserCommand`, extracting `sub` from `UserAttributes` rather
+  than trusting the top-level `Username` field — this pool addresses
+  sign-in/sign-up by email, so `Username` and `sub` only coincide by
+  configuration, not by contract, and `sub` is the identifier
+  `pre-token-generation` already treats as canonical for the exact same
+  table. In `terraform-modules` (PR against `fix/wire-missing-auth-api-routes`,
+  since both touch the same `auth_api_routes` locals block): the new
+  `GET /api/v1/auth/whoami` route, `ROLE_ASSIGNMENTS_TABLE_NAME`/
+  `ROLES_TABLE_NAME` env vars (names reused verbatim from the admin API's
+  existing wiring), and IAM scoped narrower than the admin API's own grant —
+  `dynamodb:Query` on `user_role_assignments` (no GSI) and `dynamodb:GetItem`
+  on `roles` (no `Scan`), since `/whoami` only ever reads one user's own
+  assignments and one role's own definition, never lists or mutates either
+  table.
+
+  An Opus review pass found two real issues, both fixed: the 401 response
+  for a missing vs. a Cognito-rejected access token returned each error's
+  own distinct message text, contradicting `doc/vendor-neutral-auth.md`'s
+  own claim that "the two cases are indistinguishable in the response" —
+  collapsed to one generic message, matching the existing
+  `InvalidOneTimeTokenError`/`PkceMismatchError` precedent; and
+  `userProfile.ts`'s `typeof x === 'object'` check also accepted arrays (a
+  JS quirk), which would have let a malformed `preferences` value silently
+  violate `UserProfile`'s contract — added an `Array.isArray` exclusion. All
+  343 lambda-src tests (plus the rest of the workspace) passing,
+  `lint`/`tsc --noEmit` clean, 3 repeated full test runs to check for
+  flakiness; terraform side at 83/83 `terraform test`, `tflint`/`checkov`
+  clean.
