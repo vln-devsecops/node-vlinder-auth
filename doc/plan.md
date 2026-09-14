@@ -22,7 +22,16 @@ far apart and start cold.
    passing tests locally is not the same as a clean pipeline. Check
    `gh pr checks`, and verify the reported head SHA matches your branch's HEAD
    before trusting the result.
-5. Stop for review.
+5. If the step touched the auth stack (either repo), trigger `infra`'s
+   [`cd_refresh_vlinder_auth_demo`](https://github.com/vln-devsecops/infra/blob/main/.github/workflows/cd_refresh_vlinder_auth_demo.yml)
+   workflow_dispatch — it re-applies the persistent demo against
+   `terraform-modules`' current `feature/cognito-auth-module` HEAD and runs
+   `node-vlinder-auth`'s `demo-smoke.feature` against it, catching a
+   Terraform-wiring gap CI's mocked contract tests can't see (see step 8b).
+   Manual by design, for the duration of this redesign; drop this step and
+   fold the check into ordinary CI once the redesign is done and the pace of
+   auth-stack changes settles.
+6. Stop for review.
 
 If a step turns out to be wrong or a decision needs revisiting, update
 [`rationale.md`](./rationale.md) with the new decision and its reasoning
@@ -286,15 +295,24 @@ checklist items, but is deliberately sequenced before them for that reason.
       refresh wiring fix — the module source is pinned to the branch name,
       not a commit SHA, so nothing needs editing here, only a real
       `terraform apply`), confirming the live URL actually serves every
-      route this step tests before trusting any of it green. Needs the
-      `vln-devsecops-terraform-modules-integration` role's credentials and
-      the demo root's backend config (bucket/key) — not yet run this
-      session; a real, billable AWS apply is rlc's call, not a default
-      action.
-- [ ] Decide and document how the demo stays current going forward — an
-      on-demand `workflow_dispatch` that re-applies and runs the suite, a
-      schedule, or an explicit manual step in this plan's own workflow — so a
-      future wiring gap doesn't sit undetected the same way this one did.
+      route this step tests before trusting any of it green. Mechanism is
+      built (see below) — actually triggering it against the real AWS
+      account is rlc's call, not something to run unprompted.
+- [x] Decide and document how the demo stays current going forward: rlc chose
+      an on-demand `workflow_dispatch`, invoked as a step in this plan's own
+      workflow (see "How to use this plan" above) for the duration of this
+      redesign, switching to a manual-only step once it's done and the pace
+      of auth-stack changes settles — not a permanent recurring/scheduled
+      job. Built in `infra` PR
+      [#37](https://github.com/vln-devsecops/infra/pull/37):
+      `cd_refresh_vlinder_auth_demo.yml` re-applies the demo root and runs
+      `node-vlinder-auth`'s `demo-smoke.feature` against it in one run. Its
+      AWS access reuses `vln-devsecops-terraform-modules-integration` (the
+      role already sized for this exact footprint) rather than a new role,
+      with its OIDC trust extended to `infra`'s own environment — the demo
+      root that applies this footprint lives in `infra`, not in either code
+      repo, so neither `terraform-modules` nor `node-vlinder-auth` needed (or
+      got) this role's trust.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
@@ -1453,3 +1471,26 @@ done alongside what was.
   checklist items — the first is a real, billable `terraform apply` against
   live AWS infrastructure, not something to run unprompted; the second is a
   product/process decision for rlc.
+
+- **2026-09-14** — Step 8b, last checklist item (how the demo stays current).
+  rlc's call: an on-demand `workflow_dispatch`, triggered as a step in this
+  plan's own workflow for the duration of this redesign, not a permanent
+  scheduled job — see "How to use this plan" above and the updated checklist
+  item. Built in `infra` PR #37: `cd_refresh_vlinder_auth_demo.yml`
+  re-applies `demo/vlinder_auth` against `feature/cognito-auth-module`'s
+  current HEAD, then checks out this repo and runs `demo-smoke.feature`
+  against the result in the same run. Investigating where this workflow
+  could live, and under what AWS identity, surfaced a real gap: the role
+  already sized for this exact footprint
+  (`vln-devsecops-terraform-modules-integration`) was trusted only for
+  GitHub Actions running in `terraform-modules`, and unused by any workflow
+  there — not usable from `infra`, where the demo root actually lives, and
+  not from this repo either. rlc's direction: trust `infra`'s own
+  environment, not either code repo, since neither owns a Terraform root
+  that applies this footprint — extended that role's OIDC trust accordingly
+  rather than creating a new role or widening trust onto a code repo's CI.
+  Still open: actually triggering the workflow against the real AWS account
+  (rlc's own follow-up, not run this session) and setting the
+  `TERRAFORM_MODULES_INTEGRATION_ROLE_ARN` GitHub Actions variable in
+  `infra`'s `vln-devsecops` environment, which `infra` PR #37 needs but
+  can't set itself.
