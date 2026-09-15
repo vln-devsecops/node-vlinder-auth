@@ -498,6 +498,20 @@ Not scheduled; pick up when the trigger arrives.
   `rotate_secret_role_can_only_write_the_four_rotatable_secrets` and
   similar assertions, giving each of the four secrets its own distinct
   mocked ARN.
+- **`vln-devsecops-vlinder-auth-demo-apply`'s IAM policy is a straight reuse
+  of `terraform_modules_integration`'s policy** (`infra`'s `rg_security.tf`),
+  which is broad and escalation-capable (`iam:CreateRole`/`CreatePolicy`/
+  `CreateUser`/`AttachRolePolicy`/`AttachUserPolicy` on `Resource = "*"`,
+  plus `s3:PutObject`/`DeleteObject`/`DeleteBucket` on `*`). Reused
+  deliberately as a safe starting point rather than a hand-trimmed policy
+  nobody could validate against real AWS in that session. Now that there are
+  two independently escalation-capable roles instead of one, trimming this
+  down to just the Cognito/CloudFront/Lambda/DynamoDB/ACM/Route53/state-key
+  permissions the demo apply actually needs is worth doing for real, once
+  there's a safe way to validate a trimmed policy against a real apply (e.g.
+  once rlc has run the `cd_refresh_vlinder_auth_demo.yml` workflow
+  successfully once with the broad policy, a follow-up PR could trim it and
+  verify against that same live stack).
 
 ## Progress log
 
