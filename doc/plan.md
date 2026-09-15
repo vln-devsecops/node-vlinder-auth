@@ -22,7 +22,29 @@ far apart and start cold.
    passing tests locally is not the same as a clean pipeline. Check
    `gh pr checks`, and verify the reported head SHA matches your branch's HEAD
    before trusting the result.
-5. Stop for review.
+5. If the step touched the auth stack (either repo), trigger `infra`'s
+   [`cd_refresh_vlinder_auth_demo`](https://github.com/vln-devsecops/infra/blob/main/.github/workflows/cd_refresh_vlinder_auth_demo.yml)
+   workflow_dispatch — it re-applies the persistent demo against
+   `terraform-modules`' current `feature/cognito-auth-module` HEAD and runs
+   `node-vlinder-auth`'s `demo-smoke.feature` against it, catching a
+   Terraform-wiring gap CI's mocked contract tests can't see (see step 8b).
+   **Sequencing caveat for a step that touches `packages/lambda-src`**: the
+   demo picks up Lambda code via `cd_publish_lambda_src.yml` (publishes only
+   `on: push: branches: [main]`, i.e. after merge) and then
+   `terraform-modules`' own Dependabot bump of the pinned
+   `@vln-devsecops/auth-lambda` version — two more steps, both needing their
+   own merge, before an apply picks up the new code. Triggering this
+   workflow *before* merging such a step proves nothing about that step's
+   own change; it only re-validates whatever Lambda version is already live.
+   For a `lambda-src` change, trigger this **after** merge, publish, and the
+   Dependabot bump all land — not as part of "before stop for review" here.
+   A `terraform-modules`-only change has no such lag: its module source is
+   pinned to the branch itself, so a merge into `feature/cognito-auth-module`
+   is picked up on the very next apply, and this step can run right away.
+   Manual by design, for the duration of this redesign; drop this step and
+   fold the check into ordinary CI once the redesign is done and the pace of
+   auth-stack changes settles.
+6. Stop for review.
 
 If a step turns out to be wrong or a decision needs revisiting, update
 [`rationale.md`](./rationale.md) with the new decision and its reasoning
@@ -262,26 +284,48 @@ means every step from here on gets the same routing-level safety net this
 gap showed was missing; it is not a hard prerequisite for step 9's remaining
 checklist items, but is deliberately sequenced before them for that reason.
 
-- [ ] Reimplement PR #22's demo-smoke scenario (seeded admin user signs in,
+- [x] Reimplement PR #22's demo-smoke scenario (seeded admin user signs in,
       reaches the admin panel) against current `e2e` conventions. Its diff
       against current `main` touches ~170 files — nearly this repo's entire
       history since July, including the privilege-model rewrite, client
       registry, RP handoff, refresh and reference-bff — so a literal rebase
-      is not realistically on the table; treat the old branch as a reference
-      for scope and behavior, not a starting point to carry forward.
-- [ ] Extend it beyond the original smoke scope to specifically route through
+      was not realistically on the table; the old branch served as a
+      reference for scope and behavior, not a starting point carried
+      forward.
+- [x] Extend it beyond the original smoke scope to specifically route through
       every endpoint a Terraform wiring gap could silently drop:
-      `/authorize`, `/token`, `/refresh`, `/whoami`, and the OIDC discovery
-      document. Lambda-level unit tests already cover their logic in full;
-      only a real deployment catches a missing `route_key`.
-- [ ] Bump `infra/demo/vlinder_auth`'s module ref to `feature/cognito-auth-module`'s
+      `/authorize`, `/token`, `/refresh` and `/whoami`. (The OIDC discovery
+      document already has this exact coverage —
+      `oidc-discovery.feature`'s "served as `application/json`" scenario
+      fetches it from a real deployment — so it wasn't duplicated here.)
+      Lambda-level unit tests already cover each route's logic in full; only
+      a real deployment, routed through a real API Gateway, catches a
+      missing `route_key` — confirmed by reading every handler's error path
+      to verify a bare/malformed request to each always 4xxs and never 5xxs,
+      so a 404 in this scenario outline can only mean routing regressed.
+- [ ] Re-apply `infra/demo/vlinder_auth` to pick up `feature/cognito-auth-module`'s
       current HEAD (now including the whoami route and the authorize/token/
-      refresh wiring fix) and re-apply, confirming the live URL actually
-      serves every route this step tests before trusting any of it green.
-- [ ] Decide and document how the demo stays current going forward — an
-      on-demand `workflow_dispatch` that re-applies and runs the suite, a
-      schedule, or an explicit manual step in this plan's own workflow — so a
-      future wiring gap doesn't sit undetected the same way this one did.
+      refresh wiring fix — the module source is pinned to the branch name,
+      not a commit SHA, so nothing needs editing here, only a real
+      `terraform apply`), confirming the live URL actually serves every
+      route this step tests before trusting any of it green. Mechanism is
+      built (see below) — actually triggering it against the real AWS
+      account is rlc's call, not something to run unprompted.
+- [x] Decide and document how the demo stays current going forward: rlc chose
+      an on-demand `workflow_dispatch`, invoked as a step in this plan's own
+      workflow (see "How to use this plan" above) for the duration of this
+      redesign, switching to a manual-only step once it's done and the pace
+      of auth-stack changes settles — not a permanent recurring/scheduled
+      job. Built in `infra` PR
+      [#37](https://github.com/vln-devsecops/infra/pull/37):
+      `cd_refresh_vlinder_auth_demo.yml` re-applies the demo root and runs
+      `node-vlinder-auth`'s `demo-smoke.feature` against it in one run. Its
+      AWS access reuses `vln-devsecops-terraform-modules-integration` (the
+      role already sized for this exact footprint) rather than a new role,
+      with its OIDC trust extended to `infra`'s own environment — the demo
+      root that applies this footprint lives in `infra`, not in either code
+      repo, so neither `terraform-modules` nor `node-vlinder-auth` needed (or
+      got) this role's trust.
 
 ### 9. Step-up and `/whoami` — Sonnet / **Opus (security-critical)**
 
@@ -1432,3 +1476,49 @@ done alongside what was.
   `lint`/`tsc --noEmit` clean, 3 repeated full test runs to check for
   flakiness; terraform side at 83/83 `terraform test`, `tflint`/`checkov`
   clean.
+
+- **2026-09-14** — Step 8b, first two checklist items (persistent demo +
+  e2e route-wiring coverage). `e2e/features/demo-smoke.feature` and its step
+  definitions reimplemented from scratch against current `e2e` conventions —
+  PR #22's branch was, as anticipated when this step was written, not
+  rebasable (~170 files of drift), so it served only as a reference for
+  scope. Two scenarios: the original seeded-admin-user sign-in reaching the
+  admin panel, and a new outline sending a deliberately invalid request to
+  each of `/authorize`, `/token`, `/refresh` and `/whoami` and asserting a
+  4xx in `[400, 500)` — never a 404, which (per each handler's own
+  `errorResponse` mapping, read directly rather than assumed) is the one
+  status none of them can legitimately produce for a bare request, so seeing
+  one there can only mean the route itself isn't wired. `/.well-known/
+  openid-configuration` already had equivalent live-deployment coverage via
+  `oidc-discovery.feature`, so it wasn't duplicated. `cucumber-js --dry-run`
+  resolves all 21 scenarios, `tsc --noEmit` and `eslint .` clean.
+
+  Not done this session, deliberately: re-applying `infra/demo/vlinder_auth`
+  to pick up `feature/cognito-auth-module`'s current HEAD, and deciding how
+  the demo stays current going forward. Both remain as this step's last two
+  checklist items — the first is a real, billable `terraform apply` against
+  live AWS infrastructure, not something to run unprompted; the second is a
+  product/process decision for rlc.
+
+- **2026-09-14** — Step 8b, last checklist item (how the demo stays current).
+  rlc's call: an on-demand `workflow_dispatch`, triggered as a step in this
+  plan's own workflow for the duration of this redesign, not a permanent
+  scheduled job — see "How to use this plan" above and the updated checklist
+  item. Built in `infra` PR #37: `cd_refresh_vlinder_auth_demo.yml`
+  re-applies `demo/vlinder_auth` against `feature/cognito-auth-module`'s
+  current HEAD, then checks out this repo and runs `demo-smoke.feature`
+  against the result in the same run. Investigating where this workflow
+  could live, and under what AWS identity, surfaced a real gap: the role
+  already sized for this exact footprint
+  (`vln-devsecops-terraform-modules-integration`) was trusted only for
+  GitHub Actions running in `terraform-modules`, and unused by any workflow
+  there — not usable from `infra`, where the demo root actually lives, and
+  not from this repo either. rlc's direction: trust `infra`'s own
+  environment, not either code repo, since neither owns a Terraform root
+  that applies this footprint — extended that role's OIDC trust accordingly
+  rather than creating a new role or widening trust onto a code repo's CI.
+  Still open: actually triggering the workflow against the real AWS account
+  (rlc's own follow-up, not run this session) and setting the
+  `TERRAFORM_MODULES_INTEGRATION_ROLE_ARN` GitHub Actions variable in
+  `infra`'s `vln-devsecops` environment, which `infra` PR #37 needs but
+  can't set itself.
