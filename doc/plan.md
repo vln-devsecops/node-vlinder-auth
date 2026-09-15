@@ -506,8 +506,9 @@ Not scheduled; pick up when the trigger arrives.
   deliberately as a safe starting point rather than a hand-trimmed policy
   nobody could validate against real AWS in that session. Now that there are
   two independently escalation-capable roles instead of one, trimming this
-  down to just the Cognito/CloudFront/Lambda/DynamoDB/ACM/Route53/state-key
-  permissions the demo apply actually needs is worth doing for real, once
+  down to just the Cognito/CloudFront/Lambda/DynamoDB/ACM/Route53/KMS/Secrets
+  Manager/state-key permissions the demo apply actually needs is worth doing
+  for real, once
   there's a safe way to validate a trimmed policy against a real apply (e.g.
   once rlc has run the `cd_refresh_vlinder_auth_demo.yml` workflow
   successfully once with the broad policy, a follow-up PR could trim it and
